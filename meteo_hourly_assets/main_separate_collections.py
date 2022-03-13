@@ -29,8 +29,17 @@ logging.getLogger('requests').setLevel(logging.INFO)
 logging.getLogger('rasterio').setLevel(logging.INFO)
 logging.getLogger('urllib3').setLevel(logging.INFO)
 
-ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
-                'projects/disalexi/meteo_data/global_v001_hourly'
+ASSET_ROOT = 'projects/earthengine-legacy/assets/' \
+             'projects/disalexi/meteo_data'
+ASSET_FOLDER = {
+    'airpressure': 'airpressure',
+    'temperature': 'airtemperature',
+    'vp': 'vp',
+    'windspeed': 'windspeed',
+}
+ASSET_COLL_NAME = 'global_v001_hourly'
+# ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
+#                 'projects/disalexi/meteo_data/{variable}/global_v001_hourly'
 ASSET_DT_FMT = '%Y%m%d%H'
 BUCKET_NAME = 'meteo_insol_data'
 BUCKET_FOLDER = {
@@ -61,13 +70,13 @@ TIF_DT_RE = '(?P<date>\d{7}_\d{2})'
 VARIABLES = ['airpressure', 'temperature', 'vp', 'windspeed']
 
 
-def hourly_ingest(tgt_dt, variables, overwrite_flag=False):
+def hourly_ingest(tgt_dt, variable, overwrite_flag=False):
     """
 
     Parameters
     ----------
     tgt_dt : datetime
-    variables : list
+    variable : str
     overwrite_flag : bool, optional
 
     Returns
@@ -77,32 +86,21 @@ def hourly_ingest(tgt_dt, variables, overwrite_flag=False):
     """
     # tgt_date = tgt_dt.strftime('%Y%m%d%H')
 
-    logging.info(f'DisALEXI 3 hour meteo - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
-    # response = f'DisALEXI 3 hour meteo - {tgt_dt.strftime("%Y-%m-%dT%H00")}'
+    logging.info(f'DisALEXI 3 hour {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
+    # response = f'DisALEXI 3 hour {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}'
 
-    # DEADBEEF - This is a hack since the number at the end of the file name
-    #   is the index (0-7), not the actual hour of the image (0, 3, 6 ... 21)
+    # DEADBEEF - This is a hack since the "hours" in the file name is not actually hours
     tif_dt = (datetime.datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
               datetime.timedelta(hours=int(tgt_dt.hour) / 3))
+    tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX[variable],
+                                   date=tif_dt.strftime(TIF_DT_FMT))
+    bucket_path = f'gs://{BUCKET_NAME}/{BUCKET_FOLDER[variable]}/{tif_name}'
 
-    # TODO: Move back into params dictionary below after testing
-    bands = [
-        {'id': v, 'tilesetId': v, 'tilesetBandIndex': 0}
-        for i, v in enumerate(variables)
-    ]
-    tilesets = [
-        {"id": v,
-         "sources": [{"uris": [f'gs://{BUCKET_NAME}/{BUCKET_FOLDER[v]}/'
-                               f'{TIF_PREFIX[v]}{tif_dt.strftime(TIF_DT_FMT)}.tif']}]}
-        for i, v in enumerate(variables)]
-    # import pprint
-    # pprint.pprint(bands)
-    # pprint.pprint(tilesets)
-    # input('ENTER')
+    asset_id = f'{ASSET_ROOT}/{ASSET_FOLDER[variable]}/{ASSET_COLL_NAME}/' \
+               f'{tgt_dt.strftime(ASSET_DT_FMT)}'
+    export_name = f'disalexi_3hour_{variable}_{tgt_dt.strftime("%Y%m%d%H")}'
 
-    asset_id = f'{ASSET_COLL_ID}/{tgt_dt.strftime(ASSET_DT_FMT)}'
-    export_name = f'disalexi_3hour_meteo_{tgt_dt.strftime("%Y%m%d%H")}'
-
+    logging.debug(f'  {bucket_path}')
     logging.debug(f'  {asset_id}')
     logging.debug(f'  {export_name}')
 
@@ -117,19 +115,19 @@ def hourly_ingest(tgt_dt, variables, overwrite_flag=False):
             return f'{export_name} - The asset already exists and overwrite '\
                    f'is False, skipping\n'
 
-    # Assume the files are in the bucket
-
+    # Assume the file is in the bucket
     logging.debug('\nIngesting into Earth Engine')
     task_id = ee.data.newTaskId()[0]
     logging.debug(f'  {task_id}')
     properties = {
+        'BAND_NAME': f'{variable}',
         'DATE_INGESTED': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
         'METEO_VERSION': DATA_VERSION,
     }
     params = {
         'name': asset_id,
-        "bands": bands,
-        "tilesets": tilesets,
+        'bands': [{'id': variable}],
+        'tilesets': [{'sources': [{'uris': [bucket_path]}]}],
         'properties': properties,
         'startTime': tgt_dt.isoformat() + '.000000000Z',
         # 'missingData': {'values': [NODATA_VALUE]},
@@ -171,14 +169,12 @@ def cron_scheduler(request):
     request_json = request.get_json(silent=True)
     request_args = request.args
 
-    variables = VARIABLES[:]
-    # if request_json and 'variables' in request_json:
-    #     variables = request_json['variables']
-    # elif request_args and 'variables' in request_args:
-    #     variables = request_args['variables']
-    # else:
-    #     variables = VARIABLES[:]
-    #     # abort(404, description='variables must be specified')
+    if request_json and 'variable' in request_json:
+        variable = request_json['variable']
+    elif request_args and 'variable' in request_args:
+        variable = request_args['variable']
+    else:
+        abort(404, description='variable must be specified')
 
     # Default start and end date to None if not set
     if request_json and 'start' in request_json:
@@ -240,7 +236,7 @@ def cron_scheduler(request):
     response += 'End Date:   {}\n'.format(end_dt.strftime('%Y-%m-%d'))
 
     args = {
-        'variables': variables,
+        'variable': variable,
         'start_dt': start_dt,
         'end_dt': end_dt,
     }
@@ -255,7 +251,7 @@ def cron_scheduler(request):
     for tgt_dt in hourly_dates(**args):
         # logging.info(f'Date: {tgt_dt.strftime("%Y-%m-%dT%H00")}')
         # response += 'Date: {}\n'.format(tgt_dt.strftime('%Y-%m-%dT%H00'))
-        response += hourly_ingest(tgt_dt, variables, overwrite_flag=True)
+        response += hourly_ingest(tgt_dt, variable, overwrite_flag=True)
         count += 1
         if count >= new_tasks:
             response += f'{count} jobs submitted\n'
@@ -264,7 +260,7 @@ def cron_scheduler(request):
     return Response(response, mimetype='text/plain')
 
 
-def hourly_dates(start_dt, end_dt, variables, hours=3, overwrite_flag=False):
+def hourly_dates(start_dt, end_dt, variable, hours=3, overwrite_flag=False):
     """Identify hourly datetimes to ingest
 
     Parameters
@@ -273,7 +269,7 @@ def hourly_dates(start_dt, end_dt, variables, hours=3, overwrite_flag=False):
         Start date.
     end_dt : datetime
         End date, inclusive.
-    variables : list
+    variables : str
     hours : int, optional
     overwrite_flag : bool, optional
 
@@ -282,7 +278,7 @@ def hourly_dates(start_dt, end_dt, variables, hours=3, overwrite_flag=False):
     list of datetimes
 
     """
-    logging.info('\nBuilding 3 hourly date list')
+    logging.info('\nBuilding 3 hourly date list  ')
     logging.info(f'  {start_dt.strftime("%Y-%m-%d")}')
     logging.info(f'  {end_dt.strftime("%Y-%m-%d")}')
 
@@ -297,7 +293,8 @@ def hourly_dates(start_dt, end_dt, variables, hours=3, overwrite_flag=False):
     # Check if any of the needed dates are currently being ingested
     # Check task list before checking asset list in case a task switches
     #   from running to done before the asset list is retrieved.
-    task_id_re = re.compile(f'Ingest image: "{ASSET_COLL_ID}/(?P<date>\d{{10}})"')
+    task_id_re = re.compile(f'Ingest image: "{ASSET_ROOT}/{ASSET_FOLDER[variable]}/'
+                            f'{ASSET_COLL_NAME}/(?P<date>\d{{10}})"')
     task_id_list = [
         desc.replace('\nAsset ingestion: ', '')
         for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()]
@@ -320,10 +317,11 @@ def hourly_dates(start_dt, end_dt, variables, hours=3, overwrite_flag=False):
     # Check if the assets already exist
     # For now, assume the collection exists
     logging.debug('\nChecking existing assets (by year)')
+    asset_coll_id = f'{ASSET_ROOT}/{ASSET_FOLDER[variable]}/{ASSET_COLL_NAME}'
     asset_dates = set()
     for year in {test_dt.year for test_dt in test_dt_list}:
         # logging.debug(f'  {year}')
-        asset_date_coll = ee.ImageCollection(ASSET_COLL_ID) \
+        asset_date_coll = ee.ImageCollection(asset_coll_id) \
             .filterDate(start_dt.strftime('%Y-%m-%d'),
                         end_dt + datetime.timedelta(days=1))\
             .filterDate(f'{year}-01-01', f'{year+1}-01-01')
@@ -352,37 +350,27 @@ def hourly_dates(start_dt, end_dt, variables, hours=3, overwrite_flag=False):
     logging.debug('\nDates (after filtering existing assets): {}'.format(
         ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
 
-    # Check bucket by year and only for missing years
-    # This should be faster later on once more of the assets are ingested
-    #   since it will skip most years
-    logging.debug('\nChecking bucket files (by year)')
+    # Check bucket file list for available dates
+    # If we limited the date range to a year we could apply additional
+    #   prefix filtering which would speed up getting the bucket file list
+    logging.debug('\nChecking bucket files')
     bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    bucket_dates = set()
-    for year in {test_dt.year for test_dt in test_dt_list}:
-        # logging.debug(f'  {year}')
-        bucket_variable_dates = []
-        for v in variables:
-            # Get the date string instead of trying to parse here so that the
-            #   hour "index" can be converted to the hour value
-            bucket_variable_dates.append({
-                m.group('date')
-                # datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
-                for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER[v]}/{TIF_PREFIX[v]}{year}')
-                for m in [re.search(TIF_DT_RE, blob.name)]
-                # if blob.name.endswith('.tif')
-            })
-        # Only return dates that are available for all variables
-        bucket_year_dates = set.intersection(*bucket_variable_dates)
+    bucket_file_list = [
+        blob.name for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER[variable]}')
+        if blob.name.endswith('.tif')]
 
-        # DEADBEEF - This is a hack since the number at the end of the file name
-        #   is the index (0-7), not the actual hour of the image (0, 3, 6 ... 21)
-        bucket_year_dates = {
-            (datetime.datetime.strptime(date_str.split('_')[0], '%Y%j') +
-             datetime.timedelta(hours=int(date_str.split('_')[1]) * 3)).strftime(ISO_DT_FMT)
-            for date_str in bucket_year_dates}
-
-        bucket_dates.update(bucket_year_dates)
-    # logging.info(f'Bucket dates: {len(bucket_dates)}')
+    # DEADBEEF - This is a hack since the "hours" in the file name is not actually hours
+    bucket_date_list = [
+        m.group('date').split('_') for f_name in bucket_file_list
+        for m in [re.search(TIF_DT_RE, f_name)]]
+    bucket_dates = {
+        (datetime.datetime.strptime(date_str, '%Y%j') +
+         datetime.timedelta(hours=int(hour) * 3)).strftime(ISO_DT_FMT)
+        for date_str, hour in bucket_date_list}
+    # bucket_dates = {
+    #     datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
+    #     for f_name in bucket_file_list
+    #     for m in [re.search(TIF_DT_RE, f_name)]}
 
     # Switch date list to be dates that are missing
     test_dt_list = [
@@ -406,7 +394,7 @@ def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
         Start date.
     end_dt : datetime
         End date.
-    hours : int, optional
+    hours : int
     skip_leap_days : bool, optional
         If True, skip leap days while incrementing (the default is True).
 
@@ -472,8 +460,8 @@ def arg_parse():
         description='Generate DisALEXI 3 hour meteo assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        '-v', '--variables', choices=VARIABLES, default=VARIABLES,
-        metavar='VAR', help='DisALEXI Meteo Variable')
+        '-v', '--variable', choices=VARIABLES, metavar='VAR',
+        help='DisALEXI Meteo Variable')
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
         default=(datetime.datetime(today.year, today.month, today.day) -
@@ -520,20 +508,21 @@ if __name__ == '__main__':
         ee.Initialize()
 
     # Build the image collection if it doesn't exist
-    logging.debug(f'Image Collection: {ASSET_COLL_ID}')
-    if not ee.data.getInfo(ASSET_COLL_ID):
+    asset_coll_id = f'{ASSET_ROOT}/{ASSET_FOLDER[args.variable]}/{ASSET_COLL_NAME}'
+    logging.debug(f'Image Collection: {asset_coll_id}')
+    if not ee.data.getInfo(asset_coll_id):
         logging.info('\nImage collection does not exist and will be built'
-                     '\n  {}'.format(ASSET_COLL_ID))
+                     '\n  {}'.format(asset_coll_id))
         input('Press ENTER to continue')
-        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
+        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, asset_coll_id)
 
     ingest_dt_list = hourly_dates(
-        args.start, args.end, hours=3, variables=args.variables,
+        args.start, args.end, variable=args.variable,
         overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
         response = hourly_ingest(
-            ingest_dt, variables=args.variables, overwrite_flag=args.overwrite)
+            ingest_dt, args.variable, overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
         time.sleep(args.delay)

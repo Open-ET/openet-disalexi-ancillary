@@ -14,14 +14,16 @@ from google.cloud import storage
 
 import openet.core.utils as utils
 
-# TODO: Move to config.py?
+# CGM - Switch over to default credentials after historical images are loaded
+# if 'FUNCTION_REGION' in os.environ:
+#     # Assume code is deployed to a cloud function
+#     logging.debug(f'\nInitializing GEE using application default credentials')
+#     import google.auth
+#     credentials, project_id = google.auth.default(
+#         default_scopes=['https://www.googleapis.com/auth/earthengine'])
+#     ee.Initialize(credentials)
 if 'FUNCTION_REGION' in os.environ:
-    # Assume code is deployed to a cloud function
-    logging.debug(f'\nInitializing GEE using application default credentials')
-    import google.auth
-    credentials, project_id = google.auth.default(
-        default_scopes=['https://www.googleapis.com/auth/earthengine'])
-    ee.Initialize(credentials)
+    ee.Initialize(ee.ServiceAccountCredentials('', key_file='steel-melody-gee.json'))
 
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
 logging.getLogger('googleapiclient').setLevel(logging.ERROR)
@@ -35,21 +37,22 @@ ASSET_DT_FMT = '%Y%m%d%H'
 BUCKET_NAME = 'meteo_insol_data'
 BUCKET_FOLDER = 'insoldata_tif'
 DATA_VERSION = 1
-ISO_DT_FMT = '%Y%m%dT%H00'
+ISO_DT_FMT = '%Y-%m-%dT%H00'
 # NODATA_VALUE = -9999
 START_MONTH_OFFSET = 3
 END_MONTH_OFFSET = 0
-# START_DAY_OFFSET = 60
-# END_DAY_OFFSET = 3
 STORAGE_CLIENT = storage.Client()
-# STORAGE_CLIENT = storage.Client(project=PROJECT_NAME)
+# Maximum number of new tasks that can be submitted in a function call
+TASK_LIMIT = 200
+# Maximum number of queued tasks (intentionally not setting to 3000)
+TASK_MAX = 1000
 TIF_PREFIX = 'insol_series_'
 TIF_NAME_FMT = '{prefix}{date}.tif'
 TIF_DT_FMT = '%Y%j_%H'
-TIF_DT_RE = '(?P<date>\d{7}_\d{2})'
+TIF_DT_RE = '(?P<date>\d{7}_\d{2}).tif'
 
 
-def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False, delay_time=1):
+def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False):
     """
 
     Parameters
@@ -57,15 +60,12 @@ def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False, delay_tim
     tgt_dt : datetime
     variable: str, optional
     overwrite_flag : bool, optional
-    delay_time : float, optional
-        Delay time in seconds between starting export tasks.  The default is 1.
 
     Returns
     -------
     str : response string
 
     """
-
     # tgt_date = tgt_dt.strftime('%Y%m%d%H')
 
     logging.info(f'DisALEXI hourly {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
@@ -107,14 +107,13 @@ def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False, delay_tim
         'tilesets': [{'sources': [{'uris': [bucket_path]}]}],
         'properties': properties,
         'startTime': tgt_dt.isoformat() + '.000000000Z',
-        # 'pyramiding_policy': 'MEAN',
         # 'missingData': {'values': [NODATA_VALUE]},
+        # 'pyramiding_policy': 'MEAN',
     }
     task = None
     for i in range(1, 6):
         try:
             task = ee.data.startIngestion(task_id, params, allow_overwrite=True)
-            time.sleep(delay_time)
             break
         except Exception as e:
             logging.info(f'  Exception starting ingest - retry {i}')
@@ -122,7 +121,7 @@ def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False, delay_tim
             time.sleep(i ** 3)
     if task is None:
         return f'{export_name} - could not start ingest task'
-        # abort(500, description='NetCDF dataset could not be opened/read')
+        # abort(500, description=f'{export_name} - could not start ingest task')
 
     return f'{export_name} - {task["id"]}\n'
     # return f'{export_name} - {task_id}\n'
@@ -202,8 +201,8 @@ def cron_scheduler(request):
 
         if start_dt > end_dt:
             abort(404, description='Start date must be before end date')
-        elif (end_dt - start_dt) > datetime.timedelta(days=200):
-            abort(404, description='No more than 6 months can be processed in a single request')
+        # elif (end_dt - start_dt) > datetime.timedelta(days=200):
+        #     abort(404, description='No more than 6 months can be processed in a single request')
         # if start_dt < datetime.datetime(2001, 1, 1):
         #     logging.debug('Start Date: {} - no images before '
         #                   '2001-01-01'.format(start_dt.strftime('%Y-%m-%d')))
@@ -220,102 +219,150 @@ def cron_scheduler(request):
         'end_dt': end_dt,
     }
 
+    # Get the number of queued tasks
+    queued_tasks = len(get_ee_tasks(states=['RUNNING', 'READY']))
+    new_tasks = min(TASK_MAX - queued_tasks, TASK_LIMIT)
+    # response += f'{queued_tasks} queued jobs\n'
+    logging.info(f'{queued_tasks} queued jobs')
+
+    count = 0
     for tgt_dt in hourly_dates(**args):
         # logging.info(f'Date: {tgt_dt.strftime("%Y-%m-%dT%H00")}')
         # response += 'Date: {}\n'.format(tgt_dt.strftime('%Y-%m-%dT%H00'))
         response += hourly_ingest(tgt_dt, variable, overwrite_flag=True)
+        count += 1
+        if count >= new_tasks:
+            # response += f'{count} jobs submitted\n'
+            logging.info(f'{count} jobs submitted')
+            break
 
     return Response(response, mimetype='text/plain')
 
 
 def hourly_dates(start_dt, end_dt, variable='insolation', overwrite_flag=False):
-    """"""
-    logging.debug('\nBuilding hourly date list')
+    """Identify hourly datetimes to ingest
 
-    logging.debug(f'{start_dt.strftime("%Y-%m-%d")}')
-    logging.debug(f'{end_dt.strftime("%Y-%m-%d")}')
+    Parameters
+    ----------
+    start_dt : datetime
+        Start date.
+    end_dt : datetime
+        End date, inclusive.
+    variable : str, optional
+    overwrite_flag : bool, optional
 
-    task_id_re = re.compile(f'disalexi_hourly_{variable}_(?P<date>\d{10})')
-    # asset_id_re = re.compile(
-    #     ASSET_COLL_ID.split('projects/')[-1] + '/(?P<date>\d{10})$')
+    Returns
+    -------
+    list of datetimes
 
-    # Figure out which asset dates need to be ingested
+    """
+    logging.info(f'\nBuilding hourly date list  '
+                 f'({start_dt.strftime("%Y-%m-%d")} to '
+                 f'{end_dt.strftime("%Y-%m-%d")})')
+
     # Start with a list of dates to check
-    # logging.debug('\nBuilding Date List')
     test_dt_list = list(hourly_date_range(start_dt, end_dt, skip_leap_days=False))
     if not test_dt_list:
         logging.info('Empty date range')
         return []
     # logging.info('\nTest dates: {}'.format(
     #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if any of the needed dates are currently being ingested
     # Check task list before checking asset list in case a task switches
     #   from running to done before the asset list is retrieved.
+    task_id_re = re.compile(f'Ingest image: "{ASSET_COLL_ID}/(?P<date>\d{{10}})"')
     task_id_list = [
         desc.replace('\nAsset ingestion: ', '')
         for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()]
-    task_date_list = [
-        datetime.datetime.strptime(m.group('date'), '%Y%m%d').strftime('%Y-%m-%d:%H00')
-        for task_id in task_id_list
-        for m in [task_id_re.search(task_id)] if m]
-    # logging.info('Task dates: {}'.format(', '.join(task_date_list)))
+    task_dates = {
+        datetime.datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
+        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m}
+    # logging.info('Task dates: {}'.format(', '.join(sorted(task_dates))))
+    # logging.info(f'Task dates: {len(task_dates)}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime('%Y-%m-%d:%H00') not in task_date_list]
+        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)]
     if not test_dt_list:
         logging.info('All dates are queued for export')
         return []
     # else:
     #     logging.info('\nMissing asset dates: {}'.format(', '.join(
     #         map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if the assets already exist
     # For now, assume the collection exists
-    # Bump end date for filterDate() calls
-    logging.debug('\nChecking existing assets')
-    filter_end_dt = end_dt + datetime.timedelta(days=1)
-    asset_date_coll = ee.ImageCollection(ASSET_COLL_ID) \
+    logging.debug('\nChecking existing assets (by year)')
+    asset_dates = set()
+    for year in {test_dt.year for test_dt in test_dt_list}:
+        # logging.debug(f'  {year}')
+        asset_date_coll = ee.ImageCollection(ASSET_COLL_ID) \
             .filterDate(start_dt.strftime('%Y-%m-%d'),
-                        filter_end_dt.strftime('%Y-%m-%d'))
-    asset_date_list = asset_date_coll.aggregate_array('system:index').getInfo()
-    logging.debug(f'\nAsset dates: {", ".join(asset_date_list)}')
+                        end_dt + datetime.timedelta(days=1))\
+            .filterDate(f'{year}-01-01', f'{year+1}-01-01')
+        asset_date_list = []
+        for i in range(1, 6):
+            try:
+                asset_date_list = asset_date_coll.aggregate_array('system:index')\
+                    .getInfo()
+                break
+            except Exception as e:
+                logging.info(f'  Exception get asset list - retry {i}')
+                logging.debug(str(e))
+                time.sleep(i ** 3)
+        if asset_date_list:
+            asset_dates.update(asset_date_list)
+    # logging.debug(f'\nAsset dates: {", ".join(sorted(asset_dates))}')
+    # logging.info(f'Asset dates: {len(asset_dates)}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_date_list]
+        if overwrite_flag or (dt.strftime(ASSET_DT_FMT) not in asset_dates)]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
         return []
     logging.debug('\nDates (after filtering existing assets): {}'.format(
-        ', '.join(map(lambda x: x.strftime('%Y-%m-%dT%H00'), test_dt_list))))
+        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
+    # logging.info(f'Test dates: {len(test_dt_list)}')
 
-    # Check bucket file list for available dates
-    # If we limited the date range to a year we could apply additional
-    #   prefix filtering which would speed up getting the bucket file list
-    logging.debug('\nChecking existing assets')
+    # Check bucket by year and only for missing years
+    # This should be faster later on once more of the assets are ingested
+    #   since it will skip most years
+    logging.debug('\nChecking bucket files (by year)')
     bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    bucket_file_list = [
-        blob.name
-        for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER}/{TIF_PREFIX}')
-        if blob.name.endswith('.tif')]
-    bucket_date_list = [
-        datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
-        for f_name in bucket_file_list
-        for m in [re.search(TIF_DT_RE, f_name)]]
+    bucket_dates = set()
+    for year in {test_dt.year for test_dt in test_dt_list}:
+        # logging.debug(f'  {year}')
+        bucket_date_list = [
+            datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
+            for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER}/{TIF_PREFIX}{year}')
+            for m in [re.search(TIF_DT_RE, blob.name)]
+            # if blob.name.endswith('.tif')
+        ]
+        # CGM - Check the bucket_dates against the test_dt_list before updating?
+        bucket_dates.update(bucket_date_list)
+    # logging.info(f'Bucket dates: {len(bucket_dates)}')
 
-    # Switch date list to be dates that are missing
+    # logging.debug('\nChecking bucket files')
+    # bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
+    # bucket_dates = {
+    #     datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
+    #     for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER}/{TIF_PREFIX}')
+    #     for m in [re.search(TIF_DT_RE, blob.name)] if m}
+
+    # Keep dates that have a bucket file
     test_dt_list = [
-        dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ISO_DT_FMT) in bucket_date_list]
+        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates]
     if not test_dt_list:
         logging.info('No dates to process after filtering bucket files')
         return []
     logging.debug('\nDates (after filtering bucket files): {}'.format(
-        ', '.join(map(lambda x: x.strftime('%Y-%m-%dT%H00'), test_dt_list))))
+        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
 
     return test_dt_list
 
@@ -452,6 +499,6 @@ if __name__ == '__main__':
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = hourly_ingest(
-            ingest_dt, overwrite_flag=args.overwrite, delay_time=args.delay)
+        response = hourly_ingest(ingest_dt, overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
+        time.sleep(args.delay)
