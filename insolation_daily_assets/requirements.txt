@@ -1,4 +1,5 @@
 earthengine-api
 flask
 google-api-python-client
+openet-core
 python-dateutil

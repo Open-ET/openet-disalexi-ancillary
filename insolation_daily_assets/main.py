@@ -1,5 +1,4 @@
 import argparse
-from calendar import monthrange
 import datetime
 import logging
 import os
@@ -9,69 +8,68 @@ import time
 from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
-import google.auth
-from google.auth.transport.requests import AuthorizedSession
+# from google.auth.transport.requests import AuthorizedSession
 
-# import openet.core.utils as utils
+import openet.core.utils as utils
 
-SCOPES = [
-    'https://www.googleapis.com/auth/earthengine',
-    # 'https://www.googleapis.com/auth/devstorage.full_control'
-]
-CREDENTIALS, project_id = google.auth.default(default_scopes=SCOPES)
+# CGM - Switch over to default credentials after historical images are loaded
+# if 'FUNCTION_REGION' in os.environ:
+#     # Assume code is deployed to a cloud function
+#     logging.debug(f'\nInitializing GEE using application default credentials')
+#     import google.auth
+#     credentials, project_id = google.auth.default(
+#         default_scopes=['https://www.googleapis.com/auth/earthengine'])
+#     ee.Initialize(credentials)
+if 'FUNCTION_REGION' in os.environ:
+    ee.Initialize(ee.ServiceAccountCredentials('', key_file='steel-melody-gee.json'))
+
+logging.getLogger('earthengine-api').setLevel(logging.INFO)
+logging.getLogger('googleapiclient').setLevel(logging.ERROR)
+logging.getLogger('requests').setLevel(logging.INFO)
+logging.getLogger('urllib3').setLevel(logging.INFO)
 
 ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
-                'projects/disalexi/insol_data/global_v001_daily_conus'
+                'projects/disalexi/insol_data/global_v001_daily'
 ASSET_DT_FMT = '%Y%m%d'
 SOURCE_COLL_ID = 'projects/earthengine-legacy/assets/' \
-                 'projects/disalexi/insol_data/GLOBAL_V001'
-RESAMPLE_METHOD = 'bicubic'
-UTC_OFFSET = 6
-START_DAY_OFFSET = 60
-END_DAY_OFFSET = 3
+                 'projects/disalexi/insol_data/global_v001_hourly'
+# Maximum number of new tasks that can be submitted in a function call
+NEW_TASKS = 200
+# Maximum number of queued tasks (intentionally not setting to 3000)
+MAX_TASKS = 1000
+# NODATA_VALUE = -9999
+START_MONTH_OFFSET = 4
+END_MONTH_OFFSET = 0
+UTC_OFFSET = 0
 
 
-def cfsr_daily_ingest(tgt_dt, overwrite_flag=False,
-                      user_credentials_flag=False):
+def ingest(tgt_dt, region='global', variable='insolation',
+           overwrite_flag=False):
     """
 
     Parameters
     ----------
     tgt_dt : datetime
+    region : {'global'}, optional
+    variable: {'insolation'}, optional
     overwrite_flag : bool, optional
-    user_credentials_flag : bool, optional
-        If True, the GEE key argument will not be set and the export tools will
-        attempt to use the user's credentials.
-        If False, the tool will attempt to use the project credentials
-        (the default is False).
 
     Returns
     -------
     str : response string
 
     """
-
     # tgt_date = tgt_dt.strftime('%Y%m%d')
-    logging.info(f'CFSR Daily Insolation - {tgt_dt.strftime("%Y-%m-%d")}')
-    # response = f'CFSR Daily Insolation - {tgt_dt.strftime("%Y-%m")}'
+
+    logging.info(f'DisALEXI Daily {variable} - {tgt_dt.strftime("%Y-%m-%d")}')
+    # response = f'DisALEXI Daily {variable} - {tgt_dt.strftime("%Y-%m")}'
 
     asset_id = f'{ASSET_COLL_ID}/{tgt_dt.strftime(ASSET_DT_FMT)}'
-    export_name = f'cfsr_daily_insolation_{tgt_dt.strftime("%Y%m%d")}'
+    export_name = f'disalexi_daily_{variable}_{tgt_dt.strftime("%Y%m%d")}'
 
     logging.debug(f'  {SOURCE_COLL_ID}')
     logging.debug(f'  {asset_id}')
     logging.debug(f'  {export_name}')
-
-    # TODO: Move to config.py
-    # TODO: Pull credentials automatically when deployed
-    logging.debug('\nInitializing Earth Engine')
-    if user_credentials_flag:
-        logging.debug('  Using user GEE credentials')
-        ee.Initialize()
-    else:
-        ee.Initialize(CREDENTIALS)
-    # else:
-    #     raise Exception('EE not initialized')
 
     if ee.data.getInfo(asset_id):
         if overwrite_flag:
@@ -84,90 +82,84 @@ def cfsr_daily_ingest(tgt_dt, overwrite_flag=False,
             return f'{export_name} - The asset already exists and overwrite '\
                    f'is False, skipping\n'
 
-    # CGM - Is projecting to the ALEXI grid intentional?
-    #   Does it matter that the v004 grid was shifted?
-    # Project to ALEXI projection/shape/domain
-    asset_transform = [0.04, 0, -125.04, 0, -0.04, 49.8]
-    asset_shape = '1456x625'
-    asset_crs = 'EPSG:4326'
+    source_coll = ee.ImageCollection(SOURCE_COLL_ID)\
+        .filterDate(tgt_dt.advance(UTC_OFFSET),
+                    tgt_dt.advance(UTC_OFFSET).advance(1, 'day'))
 
-    input_img_id = f'{SOURCE_COLL_ID}/{tgt_dt.strftime("%Y%j")}'
-    input_img = ee.Image(input_img_id)
-    logging.debug(f'  {input_img_id}')
-
-    # asset_info = input_img.select([0]).getInfo()
-    # asset_crs = 'EPSG:4326'
-    # asset_shape = asset_info['bands'][0]['dimensions']
-    # asset_shape = '{0}x{1}'.format(*asset_shape)
-    # asset_transform = asset_info['bands'][0]['crs_transform']
-
-    if UTC_OFFSET > 0:
-        logging.debug('  Positive UTC offset, adding bands for next day')
-        next_id = (tgt_dt + datetime.timedelta(days=1)).strftime('%Y%j')
-        next_img_id = f'{SOURCE_COLL_ID}/{next_id}'
-        logging.debug(f'  {next_img_id}')
-        input_img = input_img\
-            .select(list(range(UTC_OFFSET, 24)))\
-            .addBands(ee.Image(next_img_id).select(list(range(UTC_OFFSET))))
-    elif UTC_OFFSET == 0:
-        pass
-    else:
-        raise ValueError('Negative utc_offsets are not supported')
-
-    # TODO: Decide if the scheduler should be responsible for checking if there
-    #   are enough source images
-    # TODO: Wrap getInfo call in a try/except loop
+    # TODO: Check if there is a different exception for the collection not existing
+    #   vs being empty after filtering vs any other EE error
     try:
-        source_count = input_img.bandNames().size().getInfo()
-    except:
-        source_count = 0
+        source_count = source_coll.size().getInfo()
+    except Exception as e:
+        logging.info(str(e))
+        source_count == -1
+
+    if source_count == -1:
+        return f'{export_name} - source image count error\n'
     if source_count == 0:
         return f'{export_name} - source image does not exist\n'
     elif source_count < 24:
         return f'{export_name} - too few source images ({source_count}) for day\n'
 
     # Sum the hourly bands to daily
-    output_img = input_img.reduce(ee.Reducer.sum()) \
+    output_img = source_coll.reduce(ee.Reducer.sum()) \
         .rename(['rs']).toInt16()
 
-    if RESAMPLE_METHOD != 'nearest':
-        output_img = output_img.resample('bicubic')
-        #     .reproject(crs=export_crs, crsTransform=export_transform)
+    # # if RESAMPLE_METHOD != 'nearest':
+    # if region == 'conus':
+    #     output_img = output_img.resample('bicubic')
+    #     #     .reproject(crs=export_crs, crsTransform=export_transform)
 
-    output_img = output_img.set({
-        'system:time_start': millis(tgt_dt),
-        'date_ingested': input_img.get('DATE_INGESTED'),
+    # Use the first image for getting the image properties
+    # Assume all properties for the day will be the same
+    source_img = source_coll.first()
+    properties = {
+        'system:time_start': utils.millis(tgt_dt),
+        'date_ingested': source_img.get('date_ingested'),
         'doy': tgt_dt.strftime('%j'),
-        'insolation_version': input_img.get('INSOLATION_VERSION'),
-        'resample_method': RESAMPLE_METHOD,
-        'units': 'W m-2',
+        'insolation_version': source_img.get('insolation_version'),
+        'units': source_img.get('units'),
         'utc_offset': UTC_OFFSET,
-    })
+    }
+    # if region == 'conus':
+    #     properties['resample_method'] = RESAMPLE_METHOD
+
+    # if region == 'global':
+    asset_transform = [0.25, 0, -180.0, 0, -0.25, 90.0]
+    asset_shape = '1440x720'
+    asset_crs = 'EPSG:4326'
+    # elif region == 'conus':
+    #     asset_transform = [0.04, 0.0, -125.02, 0.0, -0.04, 49.78]
+    #     asset_shape = '1456x625'
+    #     asset_crs = 'EPSG:4326'
+
+    # CGM - Could get projection from one of the images
+    # asset_info = source_img.select([0]).getInfo()
+    # asset_crs = asset_info['bands'][0]['projection']
+    # asset_shape = asset_info['bands'][0]['dimensions']
+    # asset_shape = '{0}x{1}'.format(*asset_shape)
+    # asset_transform = asset_info['bands'][0]['crs_transform']
 
     task = ee.batch.Export.image.toAsset(
-        image=output_img,
+        image=output_img.set(properties),
         description=export_name,
         assetId=asset_id,
         crs=asset_crs,
         crsTransform=asset_transform,
         dimensions=asset_shape,
     )
-    # return f'{export_name}\n'
 
     # Start the export task
-    task.start()
-
-    # # Try to start the task a couple of times
-    # for i in range(1, 6):
-    #     try:
-    #         task.start()
-    #         break
-    #     except ee.ee_exception.EEException as e:
-    #         logging.warning('EE Exception, retry {}\n{}'.format(i, e))
-    #     except Exception as e:
-    #         logging.warning('Unhandled Exception: {}'.format(e))
-    #         return 'Unhandled Exception: {}'.format(e)
-    #     time.sleep(i ** 2)
+    for i in range(1, 6):
+        try:
+            task.start()
+            break
+        except ee.ee_exception.EEException as e:
+            logging.warning(f'EE Exception, retry {i}\n{e}')
+            time.sleep(i ** 3)
+        except Exception as e:
+            logging.warning(f'Unhandled Exception: {e}')
+            return f'Unhandled Exception: {e}'
 
     return f'{export_name} - {task.id}\n'
 
@@ -186,10 +178,32 @@ def cron_scheduler(request):
     `make_response <http://flask.pocoo.org/docs/1.0/api/#flask.Flask.make_response>`.
 
     """
-    response = 'Generate Daily CFSR Insolation\n'
+    logging.info('Export DisALEXI Daily Insolation (from hourly)')
 
     request_json = request.get_json(silent=True)
     request_args = request.args
+
+    variable = 'insolation'
+    # if request_json and 'variable' in request_json:
+    #     variable = request_json['variable']
+    # elif request_args and 'variable' in request_args:
+    #     variable = request_args['variable']
+    # else:
+    #     abort(404, description='variable must be specified')
+
+    # if request_json and 'region' in request_json:
+    #     region = request_json['region']
+    # elif request_args and 'region' in request_args:
+    #     region = request_args['region']
+    # else:
+    #     region = 'global'
+    #
+    # if request_json and 'utc_offset' in request_json:
+    #     utc_offset = request_json['utc_offset']
+    # elif request_args and 'utc_offset' in request_args:
+    #     utc_offset = request_args['utc_offset']
+    # else:
+    #     utc_offset = 0
 
     # Default start and end date to None if not set
     if request_json and 'start' in request_json:
@@ -209,9 +223,13 @@ def cron_scheduler(request):
     if not start_date and not end_date:
         today = datetime.datetime.today()
         start_dt = (datetime.datetime(today.year, today.month, today.day) -
-                    relativedelta(days=START_DAY_OFFSET))
+                    relativedelta(months=START_MONTH_OFFSET))
         end_dt = (datetime.datetime(today.year, today.month, today.day) -
-                  relativedelta(days=END_DAY_OFFSET))
+                  relativedelta(months=END_MONTH_OFFSET))
+        # start_dt = (datetime.datetime(today.year, today.month, today.day) -
+        #             relativedelta(days=START_DAY_OFFSET))
+        # end_dt = (datetime.datetime(today.year, today.month, today.day) -
+        #           relativedelta(days=END_DAY_OFFSET))
     elif start_date and end_date:
         # Only process custom range if start and end are both set
         # Limit the end date to the last full month date
@@ -242,53 +260,54 @@ def cron_scheduler(request):
         #     start_dt = datetime.datetime(1980, 1, 1)
     else:
         abort(404, description='Both start and end date must be specified')
-    response += 'Start Date: {}\n'.format(start_dt.strftime('%Y-%m-%d'))
-    response += 'End Date:   {}\n'.format(end_dt.strftime('%Y-%m-%d'))
 
     args = {
-        'start_dt': start_dt,
-        'end_dt': end_dt,
+        'start_dt': start_dt, 'end_dt': end_dt,
+        'variable': variable, 'limit': NEW_TASKS,
     }
 
-    for tgt_dt in cfsr_daily_dates(**args):
-        # logging.info(f'Date: {tgt_dt.strftime("%Y-%m-%d")}')
-        # response += 'Date: {}\n'.format(tgt_dt.strftime('%Y-%m-%d'))
-        response += cfsr_daily_ingest(tgt_dt, overwrite_flag=True)
+    count = 0
+    for tgt_dt in ingest_dates(**args):
+        ingest(tgt_dt, variable, overwrite_flag=True)
+        count += 1
 
-    return Response(response, mimetype='text/plain')
+    return Response(f'Exported {count} new assets', mimetype='text/plain')
 
 
-def cfsr_daily_dates(start_dt, end_dt, overwrite_flag=False,
-                     user_credentials_flag=False):
-    """"""
-    logging.debug('\nBuilding CFSR daily date list')
+def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
+    """Identify daily datetimes to ingest
 
-    logging.debug('{}'.format(start_dt.strftime('%Y-%m-%d')))
-    logging.debug('{}'.format(end_dt.strftime('%Y-%m-%d')))
+    Parameters
+    ----------
+    start_dt : datetime
+        Start date.
+    end_dt : datetime
+        End date, inclusive.
+    variable : str
+    limit : int
+    overwrite_flag : bool, optional
 
-    # TODO: Move to config.py
-    logging.debug('\nInitializing Earth Engine')
-    if user_credentials_flag:
-        logging.debug('  Using user GEE credentials')
-        ee.Initialize()
-    else:
-        ee.Initialize(CREDENTIALS)
-    # else:
-    #     raise Exception('EE not initialized')
+    Returns
+    -------
+    list of datetimes
 
-    task_id_re = re.compile('cfsr_daily_insolation_(?P<date>\d{8})')
+    """
+    logging.info(f'Building daily date list')
+    logging.info(f'  Start Date: {start_dt.strftime("%Y-%m-%d")}')
+    logging.info(f'  End Date:   {end_dt.strftime("%Y-%m-%d")}')
+
+    task_id_re = re.compile('disalexi_daily_{variable}_(?P<date>\d{8})')
     # asset_id_re = re.compile(
     #     ASSET_COLL_ID.split('projects/')[-1] + '/(?P<date>\d{8})$')
 
-    # Figure out which asset dates need to be ingested
     # Start with a list of dates to check
-    # logging.debug('\nBuilding Date List')
     test_dt_list = list(date_range(start_dt, end_dt, skip_leap_days=False))
     if not test_dt_list:
         logging.info('Empty date range')
         return []
     # logging.info('\nTest dates: {}'.format(
     #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if any of the needed dates are currently being ingested
     # Check task list before checking asset list in case a task switches
@@ -296,16 +315,16 @@ def cfsr_daily_dates(start_dt, end_dt, overwrite_flag=False,
     task_id_list = [
         desc.replace('\nAsset ingestion: ', '')
         for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()]
-    task_date_list = [
+    task_count = len(task_id_list)
+    task_dates = {
         datetime.datetime.strptime(m.group('date'), '%Y%m%d').strftime('%Y-%m-%d')
-        for task_id in task_id_list
-        for m in [task_id_re.search(task_id)] if m]
-    # logging.info('Task dates: {}'.format(', '.join(task_date_list)))
+        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m}
+    # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime('%Y-%m-%d') not in task_date_list]
+        if overwrite_flag or dt.strftime('%Y-%m-%d') not in task_dates]
     if not test_dt_list:
         logging.info('All dates are queued for export')
         return []
@@ -317,25 +336,16 @@ def cfsr_daily_dates(start_dt, end_dt, overwrite_flag=False,
     # For now, assume the collection exists
     # Bump end date for filterDate() calls
     logging.debug('\nChecking existing assets')
-    filter_end_dt = end_dt + datetime.timedelta(days=1)
-    asset_date_coll = ee.ImageCollection(ASSET_COLL_ID) \
-            .filterDate(start_dt.strftime('%Y-%m-%d'),
-                        filter_end_dt.strftime('%Y-%m-%d'))
-    asset_date_list = asset_date_coll \
-        .aggregate_array('system:index').getInfo()
-    # asset_id_list = get_ee_assets(
-    #     ASSET_COLL_ID, start_dt, end_dt + datetime.timedelta(days=1))
-    # asset_date_list = [
-    #     datetime.datetime.strptime(m.group('date'), ASSET_DT_FMT)
-    #         .strftime('%Y-%m-%d')
-    #     for asset_id in asset_id_list
-    #     for m in [asset_id_re.search(asset_id)] if m]
-    logging.debug(f'\nAsset dates: {", ".join(asset_date_list)}')
+    asset_date_coll = ee.ImageCollection(ASSET_COLL_ID)\
+        .filterDate(start_dt.strftime('%Y-%m-%d'),
+                    (end_dt + datetime.timedelta(days=1)).strftime('%Y-%m-%d'))
+    asset_dates = set(asset_date_coll.aggregate_array('system:index').getInfo())
+    # logging.debug(f'\nAsset dates: {", ".join(sorted(asset_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_date_list]
+        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_dates]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
         return []
@@ -344,6 +354,15 @@ def cfsr_daily_dates(start_dt, end_dt, overwrite_flag=False,
 
     # TODO: Should the source collection be checked here to see if there are
     #   enough images?
+
+    # Limit the number of dates returned to the number of open queue spots
+    if limit:
+        new_tasks = min(MAX_TASKS - len(task_id_list), limit)
+        logging.info(f'Date count:    {len(test_dt_list)}')
+        logging.info(f'Date limit:    {limit}')
+        logging.info(f'Queued tasks:  {task_count}')
+        logging.info(f'Limited dates: {new_tasks}')
+        test_dt_list = test_dt_list[:new_tasks]
 
     return test_dt_list
 
@@ -416,80 +435,38 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
     return {task['description']: task for task in task_list}
 
 
-# TODO: Pull from openet.core.utils
-def millis(input_dt):
-    """Convert datetime to milliseconds since epoch
-
-    Parameters
-    ----------
-    input_dt : datetime
-
-    Returns
-    -------
-    int
-
-    """
-    import calendar
-    return 1000 * int(calendar.timegm(input_dt.timetuple()))
-
-
-# TODO: Pull from openet.core.utils
-def arg_valid_date(input_date):
-    """Check that a date string is ISO format (YYYY-MM-DD)
-
-    This function is used to check the format of dates entered as command
-      line arguments.
-    DEADBEEF - It would probably make more sense to have this function
-      parse the date using dateutil parser (http://labix.org/python-dateutil)
-      and return the ISO format string
-
-    Parameters
-    ----------
-    input_date : string
-
-    Returns
-    -------
-    datetime
-
-    Raises
-    ------
-    ArgParse ArgumentTypeError
-
-    """
-    try:
-        return datetime.datetime.strptime(input_date, "%Y-%m-%d")
-    except ValueError:
-        msg = "Not a valid date: '{}'.".format(input_date)
-        raise argparse.ArgumentTypeError(msg)
-
-
 def arg_parse():
     """"""
     today = datetime.date.today()
 
     parser = argparse.ArgumentParser(
-        description='Generate daily CFSR insolation assets',
+        description='Generate DisALEXI daily insolation assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        '--start', type=arg_valid_date, metavar='DATE',
+        '--start', type=utils.arg_valid_date, metavar='DATE',
         default=(datetime.datetime(today.year, today.month, today.day) -
-                 relativedelta(days=START_DAY_OFFSET)).strftime('%Y-%m-%d'),
+                 relativedelta(months=START_MONTH_OFFSET)).strftime('%Y-%m-%d'),
         help='Start date (format YYYY-MM-DD)')
     parser.add_argument(
-        '--end', type=arg_valid_date, metavar='DATE',
+        '--end', type=utils.arg_valid_date, metavar='DATE',
         default=(datetime.datetime(today.year, today.month, today.day) -
-                 relativedelta(days=END_DAY_OFFSET)).strftime('%Y-%m-%d'),
+                 relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
+    parser.add_argument(
+        '--delay', default=0, type=float,
+        help='Delay (in seconds) between each export tasks')
+    parser.add_argument(
+        '--key', type=utils.arg_valid_file, metavar='FILE',
+        help='Earth Engine service account JSON key file')
+    parser.add_argument(
+        '--limit', default=0, type=int,
+        help='Maximum number of new tasks to submit')
     parser.add_argument(
         '--overwrite', default=False, action='store_true',
         help='Force overwrite of existing files')
     parser.add_argument(
         '--reverse', default=False, action='store_true',
         help='Process dates in reverse order')
-    parser.add_argument(
-        '--user_credentials', default=False, action='store_true',
-        help='Use the user\'s credentials (instead of the default service '
-             'account key file)')
     parser.add_argument(
         '--debug', default=logging.INFO, const=logging.DEBUG,
         help='Debug level logging', action='store_const', dest='loglevel')
@@ -502,22 +479,31 @@ if __name__ == '__main__':
     args = arg_parse()
     logging.basicConfig(level=args.loglevel, format='%(message)s')
 
+    # if args.key and 'FUNCTION_REGION' not in os.environ:
+    if args.key:
+        logging.info(f'\nInitializing GEE using user key file: {args.key}')
+        try:
+            ee.Initialize(ee.ServiceAccountCredentials('_', key_file=args.key))
+        except ee.ee_exception.EEException:
+            raise Exception('Unable to initialize GEE using user key file')
+    else:
+        logging.info('\nInitializing Earth Engine using user credentials')
+        ee.Initialize()
+
     # Build the image collection if it doesn't exist
-    logging.debug('Image Collection: {}'.format(ASSET_COLL_ID))
-    ee.Initialize()
+    logging.debug(f'Image Collection: {ASSET_COLL_ID}')
     if not ee.data.getInfo(ASSET_COLL_ID):
-        logging.info('\nImage collection does not exist and will be built'
-                     '\n  {}'.format(ASSET_COLL_ID))
+        logging.info(f'\nImage collection does not exist and will be built'
+                     f'\n  {ASSET_COLL_ID}')
         input('Press ENTER to continue')
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
-    ingest_dt_list = cfsr_daily_dates(
-        args.start, args.end, overwrite_flag=args.overwrite,
-        user_credentials_flag=args.user_credentials)
+    ingest_dt_list = ingest_dates(
+        args.start, args.end, variable=args.variable, limit=args.limit,
+        overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = cfsr_daily_ingest(
-            ingest_dt, overwrite_flag=args.overwrite,
-            user_credentials_flag=args.user_credentials)
+        response = ingest(ingest_dt, overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
+        time.sleep(args.delay)
