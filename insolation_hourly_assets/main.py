@@ -1,5 +1,4 @@
 import argparse
-# from calendar import monthrange
 import datetime
 import logging
 import os
@@ -9,8 +8,8 @@ import time
 from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
-# from google.auth.transport.requests import AuthorizedSession
 from google.cloud import storage
+# from google.auth.transport.requests import AuthorizedSession
 
 import openet.core.utils as utils
 
@@ -28,7 +27,6 @@ if 'FUNCTION_REGION' in os.environ:
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
 logging.getLogger('googleapiclient').setLevel(logging.ERROR)
 logging.getLogger('requests').setLevel(logging.INFO)
-logging.getLogger('rasterio').setLevel(logging.INFO)
 logging.getLogger('urllib3').setLevel(logging.INFO)
 
 ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
@@ -38,21 +36,21 @@ BUCKET_NAME = 'meteo_insol_data'
 BUCKET_FOLDER = 'insoldata_tif'
 DATA_VERSION = 1
 ISO_DT_FMT = '%Y-%m-%dT%H00'
+# Maximum number of new tasks that can be submitted in a function call
+NEW_TASKS = 300
+# Maximum number of queued tasks (intentionally not setting to 3000)
+MAX_TASKS = 1000
 # NODATA_VALUE = -9999
 START_MONTH_OFFSET = 3
 END_MONTH_OFFSET = 0
 STORAGE_CLIENT = storage.Client()
-# Maximum number of new tasks that can be submitted in a function call
-TASK_LIMIT = 200
-# Maximum number of queued tasks (intentionally not setting to 3000)
-TASK_MAX = 1000
 TIF_PREFIX = 'insol_series_'
 TIF_NAME_FMT = '{prefix}{date}.tif'
 TIF_DT_FMT = '%Y%j_%H'
 TIF_DT_RE = '(?P<date>\d{7}_\d{2}).tif'
 
 
-def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False):
+def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
     """
 
     Parameters
@@ -69,7 +67,7 @@ def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False):
     # tgt_date = tgt_dt.strftime('%Y%m%d%H')
 
     logging.info(f'DisALEXI hourly {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
-    # response = f'CFSR hourly {variable} - {tgt_dt.strftime("%Y-%m")}'
+    # response = f'DisALEXI hourly {variable} - {tgt_dt.strftime("%Y-%m")}'
 
     tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX, date=tgt_dt.strftime(TIF_DT_FMT))
     bucket_path = f'gs://{BUCKET_NAME}/{BUCKET_FOLDER}/{tif_name}'
@@ -92,14 +90,11 @@ def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False):
             return f'{export_name} - The asset already exists and overwrite '\
                    f'is False, skipping\n'
 
-    # Assume the file is in the bucket
-    logging.debug('\nIngesting into Earth Engine')
-    task_id = ee.data.newTaskId()[0]
-    logging.debug(f'  {task_id}')
     properties = {
-        'BAND_NAME': f'{variable}',
-        'DATE_INGESTED': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
-        'INSOLATION_VERSION': DATA_VERSION,
+        'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
+        # 'doy': int(tgt_dt.strftime('%j')),
+        'insolation_version': DATA_VERSION,
+        'units': 'W m-2',
     }
     params = {
         'name': asset_id,
@@ -110,9 +105,12 @@ def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False):
         # 'missingData': {'values': [NODATA_VALUE]},
         # 'pyramiding_policy': 'MEAN',
     }
+
+    logging.debug('  Starting ingesting task')
     task = None
     for i in range(1, 6):
         try:
+            task_id = ee.data.newTaskId()[0]
             task = ee.data.startIngestion(task_id, params, allow_overwrite=True)
             break
         except Exception as e:
@@ -124,7 +122,6 @@ def hourly_ingest(tgt_dt, variable='insolation', overwrite_flag=False):
         # abort(500, description=f'{export_name} - could not start ingest task')
 
     return f'{export_name} - {task["id"]}\n'
-    # return f'{export_name} - {task_id}\n'
 
 
 def cron_scheduler(request):
@@ -141,7 +138,7 @@ def cron_scheduler(request):
     `make_response <http://flask.pocoo.org/docs/1.0/api/#flask.Flask.make_response>`.
 
     """
-    response = 'Generate Hourly Insolation\n'
+    logging.info('Ingest DisALEXI Hourly Insolation')
 
     request_json = request.get_json(silent=True)
     request_args = request.args
@@ -210,36 +207,20 @@ def cron_scheduler(request):
     else:
         abort(404, description='Both start and end date must be specified')
 
-    response += 'Start Date: {}\n'.format(start_dt.strftime('%Y-%m-%d'))
-    response += 'End Date:   {}\n'.format(end_dt.strftime('%Y-%m-%d'))
-
     args = {
-        'variable': variable,
-        'start_dt': start_dt,
-        'end_dt': end_dt,
+        'start_dt': start_dt, 'end_dt': end_dt,
+        'variable': variable, 'limit': NEW_TASKS,
     }
 
-    # Get the number of queued tasks
-    queued_tasks = len(get_ee_tasks(states=['RUNNING', 'READY']))
-    new_tasks = min(TASK_MAX - queued_tasks, TASK_LIMIT)
-    # response += f'{queued_tasks} queued jobs\n'
-    logging.info(f'{queued_tasks} queued jobs')
-
     count = 0
-    for tgt_dt in hourly_dates(**args):
-        # logging.info(f'Date: {tgt_dt.strftime("%Y-%m-%dT%H00")}')
-        # response += 'Date: {}\n'.format(tgt_dt.strftime('%Y-%m-%dT%H00'))
-        response += hourly_ingest(tgt_dt, variable, overwrite_flag=True)
+    for tgt_dt in ingest_dates(**args):
+        ingest(tgt_dt, variable, overwrite_flag=True)
         count += 1
-        if count >= new_tasks:
-            # response += f'{count} jobs submitted\n'
-            logging.info(f'{count} jobs submitted')
-            break
 
-    return Response(response, mimetype='text/plain')
+    return Response(f'Ingested {count} new assets', mimetype='text/plain')
 
 
-def hourly_dates(start_dt, end_dt, variable='insolation', overwrite_flag=False):
+def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
     """Identify hourly datetimes to ingest
 
     Parameters
@@ -248,7 +229,8 @@ def hourly_dates(start_dt, end_dt, variable='insolation', overwrite_flag=False):
         Start date.
     end_dt : datetime
         End date, inclusive.
-    variable : str, optional
+    limit : int
+    variable : str
     overwrite_flag : bool, optional
 
     Returns
@@ -256,9 +238,11 @@ def hourly_dates(start_dt, end_dt, variable='insolation', overwrite_flag=False):
     list of datetimes
 
     """
-    logging.info(f'\nBuilding hourly date list  '
-                 f'({start_dt.strftime("%Y-%m-%d")} to '
-                 f'{end_dt.strftime("%Y-%m-%d")})')
+    logging.info(f'Building hourly date list')
+    logging.info(f'  Start Date: {start_dt.strftime("%Y-%m-%d")}')
+    logging.info(f'  End Date:   {end_dt.strftime("%Y-%m-%d")}')
+
+    task_id_re = re.compile(f'Ingest image: "{ASSET_COLL_ID}/(?P<date>\d{{10}})"')
 
     # Start with a list of dates to check
     test_dt_list = list(hourly_date_range(start_dt, end_dt, skip_leap_days=False))
@@ -272,15 +256,14 @@ def hourly_dates(start_dt, end_dt, variable='insolation', overwrite_flag=False):
     # Check if any of the needed dates are currently being ingested
     # Check task list before checking asset list in case a task switches
     #   from running to done before the asset list is retrieved.
-    task_id_re = re.compile(f'Ingest image: "{ASSET_COLL_ID}/(?P<date>\d{{10}})"')
     task_id_list = [
         desc.replace('\nAsset ingestion: ', '')
         for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()]
+    task_count = len(task_id_list)
     task_dates = {
         datetime.datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
         for task_id in task_id_list for m in [task_id_re.search(task_id)] if m}
-    # logging.info('Task dates: {}'.format(', '.join(sorted(task_dates))))
-    # logging.info(f'Task dates: {len(task_dates)}')
+    # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
@@ -363,6 +346,15 @@ def hourly_dates(start_dt, end_dt, variable='insolation', overwrite_flag=False):
         return []
     logging.debug('\nDates (after filtering bucket files): {}'.format(
         ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
+
+    # Limit the number of dates returned to the number of open queue spots
+    if limit:
+        new_tasks = min(MAX_TASKS - len(task_id_list), limit)
+        logging.info(f'Date count:    {len(test_dt_list)}')
+        logging.info(f'Date limit:    {limit}')
+        logging.info(f'Queued tasks:  {task_count}')
+        logging.info(f'Limited dates: {new_tasks}')
+        test_dt_list = test_dt_list[:new_tasks]
 
     return test_dt_list
 
@@ -458,6 +450,9 @@ def arg_parse():
         '--key', type=utils.arg_valid_file, metavar='FILE',
         help='Earth Engine service account JSON key file')
     parser.add_argument(
+        '--limit', default=0, type=int,
+        help='Maximum number of new tasks to submit')
+    parser.add_argument(
         '--overwrite', default=False, action='store_true',
         help='Force overwrite of existing files')
     parser.add_argument(
@@ -489,16 +484,17 @@ if __name__ == '__main__':
     # Build the image collection if it doesn't exist
     logging.debug(f'Image Collection: {ASSET_COLL_ID}')
     if not ee.data.getInfo(ASSET_COLL_ID):
-        logging.info('\nImage collection does not exist and will be built'
-                     '\n  {}'.format(ASSET_COLL_ID))
+        logging.info(f'\nImage collection does not exist and will be built'
+                     f'\n  {ASSET_COLL_ID}')
         input('Press ENTER to continue')
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
-    ingest_dt_list = hourly_dates(
-        args.start, args.end, overwrite_flag=args.overwrite)
+    ingest_dt_list = ingest_dates(
+        args.start, args.end, variable='insolation', limit=args.limit,
+        overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = hourly_ingest(ingest_dt, overwrite_flag=args.overwrite)
+        response = ingest(ingest_dt, overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
         time.sleep(args.delay)

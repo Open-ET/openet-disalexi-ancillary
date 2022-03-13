@@ -20,7 +20,7 @@ The functions can be called by passing JSON data to the function.
 gcloud functions call disalexi-insolation-hourly --project openet-dri --data '{"start":"2021-10-01","end":"2021-10-05"}'
 ```
 
-If no arguments are passed to the scheduler it will check the last 60 days for missing assets.
+If no arguments are passed to the scheduler it will check the last 3 months for missing assets.
 
 ```
 gcloud functions call disalexi-insolation-hourly --project openet-dri
@@ -30,11 +30,11 @@ gcloud functions call disalexi-insolation-hourly --project openet-dri
 
 Historical Ingest
 ```
-gcloud scheduler jobs update http disalexi-insolation-hourly-historical --schedule "*/10 * * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-hourly?start=2003-01-01&end=2021-12-31" --description "DisALEXI Hourly Insolation Historical" --http-method POST --time-zone "UTC" --project openet-dri --max-retry-attempts 1
+gcloud scheduler jobs update http disalexi-insolation-hourly-historical --schedule "*/20 * * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-hourly?start=2001-01-01&end=2021-12-31" --description "DisALEXI Hourly Insolation Historical" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
 
 Daily Update
 ```
-gcloud scheduler jobs update http disalexi-insolation-hourly --schedule "42 7 * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-hourly" --description "DisALEXI Hourly Insolation Update" --http-method POST --time-zone "UTC" --project openet-dri --max-retry-attempts 5
+gcloud scheduler jobs update http disalexi-insolation-hourly --schedule "42 7 * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-hourly" --description "DisALEXI Hourly Insolation Update" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 5 --attempt-deadline=540s --min-backoff=30s
 ```
 
