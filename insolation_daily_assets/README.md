@@ -1,10 +1,19 @@
-### Deploying the cloud function
+### Cloud project
 
 Before deploying or calling the cloud functions, the "project" can be set once with the following call, or passed to each gcloud call.
 
 ```
 gcloud config set project openet-dri
 ```
+
+To enable task logging when run locally, the GOOGLE_APPLICATION_CREDENTIALS environment variable will need to be set to a local copy of the project GEE key file.
+
+```
+# Mac/Linux
+export GOOGLE_APPLICATION_CREDENTIALS="/Users/mortonc/Projects/keys/openet-dri-gee.json"
+```
+
+### Deploying the cloud function
 
 The following are the parameters that were set when deploying the function for the first time.  Subsequent deployments only need the project if not set above.
 
