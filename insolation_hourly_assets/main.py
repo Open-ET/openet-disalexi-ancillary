@@ -33,7 +33,7 @@ ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
                 'projects/disalexi/insol_data/global_v001_hourly'
 ASSET_DT_FMT = '%Y%m%d%H'
 BUCKET_NAME = 'meteo_insol_data'
-BUCKET_FOLDER = 'insoldata_tif'
+BUCKET_FOLDER = 'insoldata_tif_perband'
 DATA_VERSION = 1
 ISO_DT_FMT = '%Y-%m-%dT%H00'
 # Maximum number of new tasks that can be submitted in a function call
@@ -349,9 +349,9 @@ def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
 
     # Limit the number of dates returned to the number of open queue spots
     if limit:
-        new_tasks = min(MAX_TASKS - len(task_id_list), limit)
-        logging.info(f'Date count:    {len(test_dt_list)}')
-        logging.info(f'Date limit:    {limit}')
+        new_tasks = min(max(MAX_TASKS - len(task_id_list), 0), limit)
+        logging.debug(f'Date count:    {len(test_dt_list)}')
+        logging.debug(f'Date limit:    {limit}')
         logging.info(f'Queued tasks:  {task_count}')
         logging.info(f'Limited dates: {new_tasks}')
         test_dt_list = test_dt_list[:new_tasks]
@@ -367,7 +367,7 @@ def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
     start_dt : datetime
         Start date.
     end_dt : datetime
-        End date.
+        End date (inclusive).
     hours : int
     skip_leap_days : bool, optional
         If True, skip leap days while incrementing (the default is True).
