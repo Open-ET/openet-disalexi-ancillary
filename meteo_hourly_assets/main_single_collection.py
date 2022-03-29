@@ -29,23 +29,20 @@ logging.getLogger('googleapiclient').setLevel(logging.ERROR)
 logging.getLogger('requests').setLevel(logging.INFO)
 logging.getLogger('urllib3').setLevel(logging.INFO)
 
-ASSET_ROOT = 'projects/earthengine-legacy/assets/' \
-             'projects/disalexi/meteo_data'
-ASSET_FOLDER = {
+ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
+                'projects/disalexi/meteo_data/global_v001_3hour'
+ASSET_DT_FMT = '%Y%m%d%H'
+BAND_NAME = {
     'airpressure': 'airpressure',
-    'temperature': 'airtemperature',
-    'vp': 'vp',
+    'temperature': 'temperature',
+    'vaporpressure': 'vp',
     'windspeed': 'windspeed',
 }
-ASSET_COLL_NAME = 'global_v001_3hour'
-# ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
-#                 'projects/disalexi/meteo_data/{variable}/global_v001_3hour'
-ASSET_DT_FMT = '%Y%m%d%H'
 BUCKET_NAME = 'meteo_insol_data'
 BUCKET_FOLDER = {
     'airpressure': 'airpressure_tif',
     'temperature': 'temperature_tif',
-    'vp': 'vaporpressure_tif',
+    'vaporpressure': 'vaporpressure_tif',
     'windspeed': 'windspeed_tif',
 }
 DATA_VERSION = 1
@@ -61,29 +58,28 @@ STORAGE_CLIENT = storage.Client()
 TIF_PREFIX = {
     'airpressure': 'psfc_series_',
     'temperature': 't2_series_',
-    'vp': 'q2_series_',
+    'vaporpressure': 'q2_series_',
     'windspeed': 'wind_surface_',
 }
 TIF_NAME_FMT = '{prefix}{date}.tif'
 TIF_DT_FMT = '%Y%j_%H'
 TIF_DT_RE = '(?P<date>\d{7}_\d{2})'
-# TODO: Check these units
-UNITS = {
-    'airpressure': 'kPa',
-    'temperature': 'K',
-    'vp': 'kPa',
-    'windspeed': 'm s-1',
-}
-VARIABLES = ['airpressure', 'temperature', 'vp', 'windspeed']
+VARIABLES = ['airpressure', 'temperature', 'vaporpressure', 'windspeed']
+# UNITS = {
+#     'airpressure': 'kPa',
+#     'temperature': 'K',
+#     'vaporpressure': 'kPa',
+#     'windspeed': 'm s-1',
+# }
 
 
-def ingest(tgt_dt, variable, overwrite_flag=False):
+def ingest(tgt_dt, variables, overwrite_flag=False):
     """
 
     Parameters
     ----------
     tgt_dt : datetime
-    variable : str
+    variables : list
     overwrite_flag : bool, optional
 
     Returns
@@ -93,21 +89,17 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
     """
     # tgt_date = tgt_dt.strftime('%Y%m%d%H')
 
-    logging.info(f'DisALEXI 3 hour {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
-    # response = f'DisALEXI 3 hour {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}'
+    logging.info(f'DisALEXI 3 hour meteo - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
+    # response = f'DisALEXI 3 hour meteo - {tgt_dt.strftime("%Y-%m-%dT%H00")}'
 
-    # DEADBEEF - This is a hack since the "hours" in the file name is not actually hours
+    # DEADBEEF - This is a hack since the number at the end of the file name
+    #   is the index (0-7), not the actual hour of the image (0, 3, 6 ... 21)
     tif_dt = (datetime.datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
               datetime.timedelta(hours=int(tgt_dt.hour) / 3))
-    tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX[variable],
-                                   date=tif_dt.strftime(TIF_DT_FMT))
-    bucket_path = f'gs://{BUCKET_NAME}/{BUCKET_FOLDER[variable]}/{tif_name}'
 
-    asset_id = f'{ASSET_ROOT}/{ASSET_FOLDER[variable]}/{ASSET_COLL_NAME}/' \
-               f'{tgt_dt.strftime(ASSET_DT_FMT)}'
-    export_name = f'disalexi_3hour_{variable}_{tgt_dt.strftime("%Y%m%d%H")}'
+    asset_id = f'{ASSET_COLL_ID}/{tgt_dt.strftime(ASSET_DT_FMT)}'
+    export_name = f'disalexi_3hour_meteo_{tgt_dt.strftime("%Y%m%d%H")}'
 
-    logging.debug(f'  {bucket_path}')
     logging.debug(f'  {asset_id}')
     logging.debug(f'  {export_name}')
 
@@ -126,12 +118,19 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
         'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
         # 'doy': int(tgt_dt.strftime('%j')),
         'meteo_version': DATA_VERSION,
-        # 'units': UNITS[variable],
+        # 'units': ?,
     }
     params = {
         'name': asset_id,
-        'bands': [{'id': variable}],
-        'tilesets': [{'sources': [{'uris': [bucket_path]}]}],
+        'bands': [{'id': BAND_NAME[v], 'tilesetId': BAND_NAME[v], 'tilesetBandIndex': 0}
+                  for v in variables],
+        'tilesets': [
+            {"id": BAND_NAME[v],
+             "sources": [
+                 {"uris": [f'gs://{BUCKET_NAME}/{BUCKET_FOLDER[v]}/'
+                           f'{TIF_PREFIX[v]}{tif_dt.strftime(TIF_DT_FMT)}.tif']}]}
+            for v in variables
+        ],
         'properties': properties,
         'startTime': tgt_dt.isoformat() + '.000000000Z',
         # 'missingData': {'values': [NODATA_VALUE]},
@@ -175,13 +174,13 @@ def cron_scheduler(request):
     request_json = request.get_json(silent=True)
     request_args = request.args
 
-    if request_json and 'variable' in request_json:
-        variable = request_json['variable']
-    elif request_args and 'variable' in request_args:
-        variable = request_args['variable']
-    else:
-        abort(404, description='variable must be specified')
-    logging.info(f'Variable: {variable}')
+    variables = VARIABLES[:]
+    # if request_json and 'variables' in request_json:
+    #     variables = request_json['variables']
+    # elif request_args and 'variables' in request_args:
+    #     variables = request_args['variables']
+    # else:
+    #     # abort(404, description='variables must be specified')
 
     # Default start and end date to None if not set
     if request_json and 'start' in request_json:
@@ -241,18 +240,18 @@ def cron_scheduler(request):
 
     args = {
         'start_dt': start_dt, 'end_dt': end_dt,
-        'variable': variable, 'limit': NEW_TASKS,
+        'variables': variables, 'limit': NEW_TASKS,
     }
 
     count = 0
     for tgt_dt in ingest_dates(**args):
-        ingest(tgt_dt, variable, overwrite_flag=True)
+        ingest(tgt_dt, variables, overwrite_flag=True)
         count += 1
 
     return Response(f'Ingested {count} new assets', mimetype='text/plain')
 
 
-def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
+def ingest_dates(start_dt, end_dt, variables, limit, hours=3,
                  overwrite_flag=False):
     """Identify datetimes to ingest
 
@@ -262,7 +261,7 @@ def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
         Start date.
     end_dt : datetime
         End date, inclusive.
-    variable : str
+    variables : list
     limit : int
     hours : int, optional
     overwrite_flag : bool, optional
@@ -276,8 +275,7 @@ def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
     logging.info(f'  Start Date: {start_dt.strftime("%Y-%m-%d")}')
     logging.info(f'  End Date:   {end_dt.strftime("%Y-%m-%d")}')
 
-    task_id_re = re.compile(f'Ingest image: "{ASSET_ROOT}/{ASSET_FOLDER[variable]}/'
-                            f'{ASSET_COLL_NAME}/(?P<date>\d{{10}})"')
+    task_id_re = re.compile(f'Ingest image: "{ASSET_COLL_ID}/(?P<date>\d{{10}})"')
 
     # Start with a list of dates to check
     test_dt_list = list(hourly_date_range(start_dt, end_dt, hours=hours))
@@ -314,11 +312,10 @@ def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
     # Check if the assets already exist
     # For now, assume the collection exists
     logging.debug('\nChecking existing assets (by year)')
-    asset_coll_id = f'{ASSET_ROOT}/{ASSET_FOLDER[variable]}/{ASSET_COLL_NAME}'
     asset_dates = set()
     for year in {test_dt.year for test_dt in test_dt_list}:
         # logging.debug(f'  {year}')
-        asset_date_coll = ee.ImageCollection(asset_coll_id) \
+        asset_date_coll = ee.ImageCollection(ASSET_COLL_ID) \
             .filterDate(start_dt.strftime('%Y-%m-%d'),
                         end_dt + datetime.timedelta(days=1))\
             .filterDate(f'{year}-01-01', f'{year+1}-01-01')
@@ -347,27 +344,37 @@ def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
     logging.debug('\nDates (after filtering existing assets): {}'.format(
         ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
 
-    # Check bucket file list for available dates
-    # If we limited the date range to a year we could apply additional
-    #   prefix filtering which would speed up getting the bucket file list
-    logging.debug('\nChecking bucket files')
+    # Check bucket by year and only for missing years
+    # This should be faster later on once more of the assets are ingested
+    #   since it will skip most years
+    logging.debug('\nChecking bucket files (by year)')
     bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    bucket_file_list = [
-        blob.name for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER[variable]}')
-        if blob.name.endswith('.tif')]
+    bucket_dates = set()
+    for year in {test_dt.year for test_dt in test_dt_list}:
+        # logging.debug(f'  {year}')
+        bucket_variable_dates = []
+        for v in variables:
+            # Get the date string instead of trying to parse here so that the
+            #   hour "index" can be converted to the hour value
+            bucket_variable_dates.append({
+                m.group('date')
+                # datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
+                for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER[v]}/{TIF_PREFIX[v]}{year}')
+                for m in [re.search(TIF_DT_RE, blob.name)]
+                # if blob.name.endswith('.tif')
+            })
+        # Only return dates that are available for all variables
+        bucket_year_dates = set.intersection(*bucket_variable_dates)
 
-    # DEADBEEF - This is a hack since the "hours" in the file name is not actually hours
-    bucket_date_list = [
-        m.group('date').split('_') for f_name in bucket_file_list
-        for m in [re.search(TIF_DT_RE, f_name)]]
-    bucket_dates = {
-        (datetime.datetime.strptime(date_str, '%Y%j') +
-         datetime.timedelta(hours=int(hour) * 3)).strftime(ISO_DT_FMT)
-        for date_str, hour in bucket_date_list}
-    # bucket_dates = {
-    #     datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
-    #     for f_name in bucket_file_list
-    #     for m in [re.search(TIF_DT_RE, f_name)]}
+        # DEADBEEF - This is a hack since the number at the end of the file name
+        #   is the index (0-7), not the actual hour of the image (0, 3, 6 ... 21)
+        bucket_year_dates = {
+            (datetime.datetime.strptime(date_str.split('_')[0], '%Y%j') +
+             datetime.timedelta(hours=int(date_str.split('_')[1]) * 3)).strftime(ISO_DT_FMT)
+            for date_str in bucket_year_dates}
+
+        bucket_dates.update(bucket_year_dates)
+    # logging.info(f'Bucket dates: {len(bucket_dates)}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
@@ -400,7 +407,7 @@ def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
         Start date.
     end_dt : datetime
         End date.
-    hours : int
+    hours : int, optional
     skip_leap_days : bool, optional
         If True, skip leap days while incrementing (the default is True).
 
@@ -466,8 +473,9 @@ def arg_parse():
         description='Generate DisALEXI 3 hour meteo assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        '-v', '--variable', choices=VARIABLES, metavar='VAR',
-        help='DisALEXI Meteo Variable')
+        '-v', '--variables', nargs='+', metavar='VAR',
+        choices=VARIABLES, default=VARIABLES,
+        help='DisALEXI Meteorology Variables ({})'.format(', '.join(VARIABLES)))
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
         default=(datetime.datetime(today.year, today.month, today.day) -
@@ -516,21 +524,21 @@ if __name__ == '__main__':
         logging.info('\nInitializing Earth Engine using user credentials')
         ee.Initialize()
 
-    # Build the image collection if it doesn't exist
-    asset_coll_id = f'{ASSET_ROOT}/{ASSET_FOLDER[args.variable]}/{ASSET_COLL_NAME}'
-    logging.debug(f'Image Collection: {asset_coll_id}')
-    if not ee.data.getInfo(asset_coll_id):
-        logging.info(f'\nImage collection does not exist and will be built'
-                     f'\n  {asset_coll_id}')
-        input('Press ENTER to continue')
-        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, asset_coll_id)
+    # # Build the image collection if it doesn't exist
+    # logging.debug(f'Image Collection: {ASSET_COLL_ID}')
+    # if not ee.data.getInfo(ASSET_COLL_ID):
+    #     logging.info(f'\nImage collection does not exist and will be built'
+    #                  f'\n  {ASSET_COLL_ID}')
+    #     input('Press ENTER to continue')
+    #     ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
     ingest_dt_list = ingest_dates(
-        args.start, args.end, variable=args.variable, limit=args.limit,
+        args.start, args.end, variables=args.variables, limit=args.limit,
         overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = ingest(ingest_dt, args.variable, overwrite_flag=args.overwrite)
+        response = ingest(ingest_dt, variables=args.variables,
+                          overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
         time.sleep(args.delay)
