@@ -61,8 +61,8 @@ def ingest(tgt_dt, region='global', variable='insolation',
     """
     # tgt_date = tgt_dt.strftime('%Y%m%d')
 
-    logging.info(f'DisALEXI Daily {variable} - {tgt_dt.strftime("%Y-%m-%d")}')
-    # response = f'DisALEXI Daily {variable} - {tgt_dt.strftime("%Y-%m")}'
+    logging.info(f'DisALEXI daily {variable} - {tgt_dt.strftime("%Y-%m-%d")}')
+    # response = f'DisALEXI daily {variable} - {tgt_dt.strftime("%Y-%m")}'
 
     asset_id = f'{ASSET_COLL_ID}/{tgt_dt.strftime(ASSET_DT_FMT)}'
     export_name = f'disalexi_daily_{variable}_{tgt_dt.strftime("%Y%m%d")}'
@@ -82,9 +82,14 @@ def ingest(tgt_dt, region='global', variable='insolation',
             return f'{export_name} - The asset already exists and overwrite '\
                    f'is False, skipping\n'
 
+    start_dt = tgt_dt - datetime.timedelta(hours=UTC_OFFSET)
+    end_dt = start_dt + datetime.timedelta(days=1)
+    logging.debug(f'  {start_dt.strftime("%Y-%m-%d")}')
+    logging.debug(f'  {end_dt.strftime("%Y-%m-%d")}')
+
     source_coll = ee.ImageCollection(SOURCE_COLL_ID)\
-        .filterDate(tgt_dt.advance(UTC_OFFSET),
-                    tgt_dt.advance(UTC_OFFSET).advance(1, 'day'))
+        .filterDate(start_dt.strftime('%Y-%m-%d'),
+                    end_dt.strftime('%Y-%m-%d'))
 
     # TODO: Check if there is a different exception for the collection not existing
     #   vs being empty after filtering vs any other EE error
@@ -101,8 +106,10 @@ def ingest(tgt_dt, region='global', variable='insolation',
     elif source_count < 24:
         return f'{export_name} - too few source images ({source_count}) for day\n'
 
-    # Sum the hourly bands to daily
-    output_img = source_coll.reduce(ee.Reducer.sum()) \
+    # Sum the hourly images to daily
+    # CGM - Reducing the collection was causing an error,
+    #   but going through .toBands() seems to work
+    output_img = source_coll.toBands().reduce(ee.Reducer.sum())\
         .rename(['rs']).toInt16()
 
     # # if RESAMPLE_METHOD != 'nearest':
@@ -499,11 +506,12 @@ if __name__ == '__main__':
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
     ingest_dt_list = ingest_dates(
-        args.start, args.end, variable=args.variable, limit=args.limit,
+        args.start, args.end, variable='insolation', limit=args.limit,
         overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = ingest(ingest_dt, overwrite_flag=args.overwrite)
+        response = ingest(ingest_dt, variable='insolation',
+                          overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
         time.sleep(args.delay)
