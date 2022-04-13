@@ -34,6 +34,8 @@ ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
 ASSET_DT_FMT = '%Y%m%d%H'
 BUCKET_NAME = 'meteo_insol_data'
 BUCKET_FOLDER = 'insoldata_tif_perband'
+# BUCKET_NAME = 'openet'
+# BUCKET_FOLDER = 'disalexi/insoldata_tif'
 DATA_VERSION = 1
 ISO_DT_FMT = '%Y-%m-%dT%H00'
 # Maximum number of new tasks that can be submitted in a function call
@@ -48,6 +50,7 @@ TIF_PREFIX = 'insol_series_'
 TIF_NAME_FMT = '{prefix}{date}.tif'
 TIF_DT_FMT = '%Y%j_%H'
 TIF_DT_RE = '(?P<date>\d{7}_\d{2}).tif'
+HOURS = list(range(0, 24))
 
 
 def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
@@ -94,6 +97,7 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
         'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
         # 'doy': int(tgt_dt.strftime('%j')),
         'insolation_version': DATA_VERSION,
+        'source': bucket_path,
         'units': 'W m-2',
     }
     params = {
@@ -220,7 +224,7 @@ def cron_scheduler(request):
     return Response(f'Ingested {count} new assets', mimetype='text/plain')
 
 
-def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
+def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False):
     """Identify hourly datetimes to ingest
 
     Parameters
@@ -229,8 +233,9 @@ def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
         Start date.
     end_dt : datetime
         End date, inclusive.
-    limit : int
     variable : str
+    hours : list
+    limit : int
     overwrite_flag : bool, optional
 
     Returns
@@ -241,11 +246,12 @@ def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
     logging.info(f'Building hourly date list')
     logging.info(f'  Start Date: {start_dt.strftime("%Y-%m-%d")}')
     logging.info(f'  End Date:   {end_dt.strftime("%Y-%m-%d")}')
+    logging.info(f'  Hours:      {", ".join(map(str, hours))}')
 
     task_id_re = re.compile(f'Ingest image: "{ASSET_COLL_ID}/(?P<date>\d{{10}})"')
 
     # Start with a list of dates to check
-    test_dt_list = list(hourly_date_range(start_dt, end_dt, skip_leap_days=False))
+    test_dt_list = list(hourly_date_range(start_dt, end_dt, hours=hours))
     if not test_dt_list:
         logging.info('Empty date range')
         return []
@@ -359,7 +365,8 @@ def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
     return test_dt_list
 
 
-def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
+def hourly_date_range(start_dt, end_dt, hours=list(range(0, 24)),
+                      skip_leap_days=False):
     """Generate hourly dates within a range (inclusive)
 
     Parameters
@@ -368,7 +375,7 @@ def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
         Start date.
     end_dt : datetime
         End date (inclusive).
-    hours : int
+    hours : list, optional
     skip_leap_days : bool, optional
         If True, skip leap days while incrementing (the default is True).
 
@@ -381,8 +388,9 @@ def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
     curr_dt = copy.copy(start_dt)
     while curr_dt < (end_dt + datetime.timedelta(days=1)):
         if not skip_leap_days or curr_dt.month != 2 or curr_dt.day != 29:
-            yield curr_dt
-        curr_dt += datetime.timedelta(hours=hours)
+            if curr_dt.hour in hours:
+                yield curr_dt
+        curr_dt += datetime.timedelta(hours=1)
 
 
 def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
@@ -444,6 +452,9 @@ def arg_parse():
                  relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
     parser.add_argument(
+        '--hours', default=",".join(map(str, HOURS)),
+        help=f'Hour timesteps')
+    parser.add_argument(
         '--delay', default=0, type=float,
         help='Delay (in seconds) between each export tasks')
     parser.add_argument(
@@ -490,7 +501,8 @@ if __name__ == '__main__':
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
     ingest_dt_list = ingest_dates(
-        args.start, args.end, variable='insolation', limit=args.limit,
+        args.start, args.end, variable='insolation',
+        hours=list(map(int, args.hours.split(','))), limit=args.limit,
         overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):

@@ -2,6 +2,7 @@ import argparse
 import datetime
 import logging
 import os
+import pprint
 import re
 import time
 
@@ -81,6 +82,7 @@ UNITS = {
     'windspeed': 'm s-1',
 }
 VARIABLES = ['airpressure', 'temperature', 'vaporpressure', 'windspeed']
+HOURS = [0, 3, 6, 9, 12, 15, 18, 21]
 
 
 def ingest(tgt_dt, variable, overwrite_flag=False):
@@ -132,7 +134,8 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
         'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
         # 'doy': int(tgt_dt.strftime('%j')),
         'meteo_version': DATA_VERSION,
-        # 'units': UNITS[variable],
+        'source': bucket_path,
+        'units': UNITS[variable],
     }
     params = {
         'name': asset_id,
@@ -146,13 +149,13 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
 
     logging.debug('  Starting ingesting task')
     task = None
-    for i in range(1, 6):
+    for i in range(3, 10):
         try:
             task_id = ee.data.newTaskId()[0]
             task = ee.data.startIngestion(task_id, params, allow_overwrite=True)
             break
         except Exception as e:
-            logging.info(f'  Exception starting ingest - retry {i}')
+            logging.info(f'  Exception starting ingest - retry {i-2}')
             logging.debug(str(e))
             time.sleep(i ** 3)
     if task is None:
@@ -248,6 +251,7 @@ def cron_scheduler(request):
     args = {
         'start_dt': start_dt, 'end_dt': end_dt,
         'variable': variable,
+        'hours': HOURS,
         'limit': NEW_TASKS,
     }
 
@@ -259,8 +263,7 @@ def cron_scheduler(request):
     return Response(f'Ingested {count} new assets', mimetype='text/plain')
 
 
-def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
-                 overwrite_flag=False):
+def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False):
     """Identify datetimes to ingest
 
     Parameters
@@ -270,8 +273,8 @@ def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
     end_dt : datetime
         End date, inclusive.
     variable : str
+    hours : list
     limit : int
-    hours : int, optional
     overwrite_flag : bool, optional
 
     Returns
@@ -279,9 +282,10 @@ def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
     list of datetimes
 
     """
-    logging.info(f'Building {hours} hourly date list')
+    logging.info(f'Building datetime list')
     logging.info(f'  Start Date: {start_dt.strftime("%Y-%m-%d")}')
     logging.info(f'  End Date:   {end_dt.strftime("%Y-%m-%d")}')
+    logging.info(f'  Hours:      {", ".join(map(str, hours))}')
 
     task_id_re = re.compile(f'Ingest image: "{ASSET_ROOT}/{ASSET_FOLDER[variable]}/'
                             f'{ASSET_COLL_NAME}/(?P<date>\d{{10}})"')
@@ -398,7 +402,7 @@ def ingest_dates(start_dt, end_dt, variable, limit, hours=3,
     return test_dt_list
 
 
-def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
+def hourly_date_range(start_dt, end_dt, hours, skip_leap_days=False):
     """Generate hourly dates within a range (inclusive)
 
     Parameters
@@ -407,7 +411,7 @@ def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
         Start date.
     end_dt : datetime
         End date.
-    hours : int
+    hours : list
     skip_leap_days : bool, optional
         If True, skip leap days while incrementing (the default is True).
 
@@ -420,9 +424,9 @@ def hourly_date_range(start_dt, end_dt, hours=1, skip_leap_days=False):
     curr_dt = copy.copy(start_dt)
     while curr_dt < (end_dt + datetime.timedelta(days=1)):
         if not skip_leap_days or curr_dt.month != 2 or curr_dt.day != 29:
-            if curr_dt.hour in [18, 21]:
+            if curr_dt.hour in hours:
                 yield curr_dt
-        curr_dt += datetime.timedelta(hours=hours)
+        curr_dt += datetime.timedelta(hours=1)
 
 
 def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
@@ -476,7 +480,7 @@ def arg_parse():
     parser.add_argument(
         '-v', '--variables', nargs='+', metavar='VAR',
         choices=VARIABLES, default=VARIABLES,
-        help='DisALEXI Meteorology Variables ({})'.format(', '.join(VARIABLES)))
+        help=f'DisALEXI Meteorology Variables ({", ".join(VARIABLES)})')
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
         default=(datetime.datetime(today.year, today.month, today.day) -
@@ -487,6 +491,9 @@ def arg_parse():
         default=(datetime.datetime(today.year, today.month, today.day) -
                  relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
+    parser.add_argument(
+        '--hours', default=",".join(map(str, HOURS)),
+        help=f'Hour timesteps')
     parser.add_argument(
         '--delay', default=0, type=float,
         help='Delay (in seconds) between each export tasks')
@@ -539,8 +546,9 @@ if __name__ == '__main__':
     for variable in args.variables:
         logging.info(f'\nVariable: {variable}')
         ingest_dt_list = ingest_dates(
-            args.start, args.end, variable=variable, limit=args.limit,
-            overwrite_flag=args.overwrite)
+            args.start, args.end, variable=variable,
+            hours=list(map(int, args.hours.split(','))),
+            limit=args.limit, overwrite_flag=args.overwrite)
 
         for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
             # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
