@@ -26,7 +26,7 @@ gcloud functions deploy disalexi-insolation-daily --project openet-dri --runtime
 The functions can be called by passing JSON data to the function.
 
 ```
-gcloud functions call disalexi-insolation-daily --project openet-dri --data '{"start":"2021-10-01","end":"2021-10-05"}'
+gcloud functions call disalexi-insolation-daily --project openet-dri --data '{"region":"conus","start":"2021-10-01","end":"2021-10-05"}'
 ```
 
 If no arguments are passed to the scheduler it will check the last 4 months for missing assets.
@@ -37,12 +37,14 @@ gcloud functions call disalexi-insolation-daily --project openet-dri
 
 ### Scheduling the job
 
+Update CONUS every 10 days before interpolation
+```
+gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 7 5,15,25 * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-daily?region=conus" --description "DisALEXI Daily Insolation CONUS" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 5 --attempt-deadline=540s --min-backoff=30s
+```
+
 Historical Ingest
 ```
 gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 * * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-daily?start=2001-01-01&end=2021-12-31" --description "DisALEXI Daily Insolation Historical" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
 
-Update every 10 days before interpolation
-```
-gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 7 5,15,25 * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-daily" --description "DisALEXI Daily Insolation" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 5 --attempt-deadline=540s --min-backoff=30s
-```
+

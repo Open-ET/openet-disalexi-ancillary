@@ -40,17 +40,15 @@ MAX_TASKS = 1000
 # NODATA_VALUE = -9999
 START_MONTH_OFFSET = 4
 END_MONTH_OFFSET = 0
-UTC_OFFSET = 0
 
 
-def ingest(tgt_dt, region='global', variable='insolation',
-           overwrite_flag=False):
+def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
     """
 
     Parameters
     ----------
     tgt_dt : datetime
-    region : {'global'}, optional
+    region : {'conus', 'global'}
     variable: {'insolation'}, optional
     overwrite_flag : bool, optional
 
@@ -64,8 +62,15 @@ def ingest(tgt_dt, region='global', variable='insolation',
     logging.info(f'DisALEXI daily {variable} - {tgt_dt.strftime("%Y-%m-%d")}')
     # response = f'DisALEXI daily {variable} - {tgt_dt.strftime("%Y-%m")}'
 
-    asset_id = f'{ASSET_COLL_ID}/{tgt_dt.strftime(ASSET_DT_FMT)}'
-    export_name = f'disalexi_daily_{variable}_{tgt_dt.strftime("%Y%m%d")}'
+    if region.lower() in ['conus']:
+        asset_coll_id = f'{ASSET_COLL_ID}_{region}_test'
+    elif region.lower() in ['global']:
+        asset_coll_id = f'{ASSET_COLL_ID}'
+    else:
+        raise ValueError(f'Unsupported region parameter: {region}')
+    asset_id = f'{asset_coll_id}/{tgt_dt.strftime(ASSET_DT_FMT)}'
+
+    export_name = f'disalexi_daily_{variable}_{region}_{tgt_dt.strftime("%Y%m%d")}'
 
     logging.debug(f'  {SOURCE_COLL_ID}')
     logging.debug(f'  {asset_id}')
@@ -82,14 +87,21 @@ def ingest(tgt_dt, region='global', variable='insolation',
             return f'{export_name} - The asset already exists and overwrite '\
                    f'is False, skipping\n'
 
-    start_dt = tgt_dt - datetime.timedelta(hours=UTC_OFFSET)
+    if region.lower() == 'conus':
+        utc_offset = 6
+    else:
+        utc_offset = 0
+    logging.debug(f'  UTC offset: {utc_offset}')
+
+    start_dt = tgt_dt + datetime.timedelta(hours=utc_offset)
     end_dt = start_dt + datetime.timedelta(days=1)
-    logging.debug(f'  {start_dt.strftime("%Y-%m-%d")}')
-    logging.debug(f'  {end_dt.strftime("%Y-%m-%d")}')
+    logging.debug(f'  {start_dt.strftime("%Y-%m-%d %H%M")}')
+    logging.debug(f'  {end_dt.strftime("%Y-%m-%d %H%M")}')
 
     source_coll = ee.ImageCollection(SOURCE_COLL_ID)\
-        .filterDate(start_dt.strftime('%Y-%m-%d'),
-                    end_dt.strftime('%Y-%m-%d'))
+        .filterDate(start_dt, end_dt)
+    # print(source_coll.aggregate_array('system:index').getInfo())
+    # input('ENTER')
 
     # TODO: Check if there is a different exception for the collection not existing
     #   vs being empty after filtering vs any other EE error
@@ -106,17 +118,6 @@ def ingest(tgt_dt, region='global', variable='insolation',
     elif source_count < 24:
         return f'{export_name} - too few source images ({source_count}) for day\n'
 
-    # Sum the hourly images to daily
-    # CGM - Reducing the collection was causing an error,
-    #   but going through .toBands() seems to work
-    output_img = source_coll.toBands().reduce(ee.Reducer.sum())\
-        .rename(['rs']).toInt16()
-
-    # # if RESAMPLE_METHOD != 'nearest':
-    # if region == 'conus':
-    #     output_img = output_img.resample('bicubic')
-    #     #     .reproject(crs=export_crs, crsTransform=export_transform)
-
     # Use the first image for getting the image properties
     # Assume all properties for the day will be the same
     source_img = source_coll.first()
@@ -126,19 +127,29 @@ def ingest(tgt_dt, region='global', variable='insolation',
         'doy': tgt_dt.strftime('%j'),
         'insolation_version': source_img.get('insolation_version'),
         'units': source_img.get('units'),
-        'utc_offset': UTC_OFFSET,
+        'utc_offset': utc_offset,
     }
-    # if region == 'conus':
-    #     properties['resample_method'] = RESAMPLE_METHOD
 
-    # if region == 'global':
-    asset_transform = [0.25, 0, -180.0, 0, -0.25, 90.0]
-    asset_shape = '1440x720'
-    asset_crs = 'EPSG:4326'
-    # elif region == 'conus':
-    #     asset_transform = [0.04, 0.0, -125.02, 0.0, -0.04, 49.78]
-    #     asset_shape = '1456x625'
-    #     asset_crs = 'EPSG:4326'
+    # Sum the hourly images to daily
+    # CGM - Reducing the collection was causing an error,
+    #   but going through .toBands() seems to work
+    output_img = source_coll.toBands().reduce(ee.Reducer.sum())\
+        .rename(['rs']).toInt16()
+
+    if region == 'conus':
+        output_img = output_img.resample('bicubic')
+        #     .reproject(crs=export_crs, crsTransform=export_transform)
+        properties['resample_method'] = 'bicubic'
+
+    if region == 'global':
+        asset_transform = [0.25, 0, -180.0, 0, -0.25, 90.0]
+        asset_shape = '1440x720'
+        asset_crs = 'EPSG:4326'
+    elif region == 'conus':
+        # CGM - Matching transform of v004/v005 ALEXI
+        asset_transform = [0.04, 0.0, -125.02, 0.0, -0.04, 49.78]
+        asset_shape = '1456x625'
+        asset_crs = 'EPSG:4326'
 
     # CGM - Could get projection from one of the images
     # asset_info = source_img.select([0]).getInfo()
@@ -198,13 +209,14 @@ def cron_scheduler(request):
     # else:
     #     abort(404, description='variable must be specified')
 
-    # if request_json and 'region' in request_json:
-    #     region = request_json['region']
-    # elif request_args and 'region' in request_args:
-    #     region = request_args['region']
-    # else:
-    #     region = 'global'
-    #
+    if request_json and 'region' in request_json:
+        region = request_json['region']
+    elif request_args and 'region' in request_args:
+        region = request_args['region']
+    else:
+        abort(404, description='Region must be specified')
+        # region = 'global'
+
     # if request_json and 'utc_offset' in request_json:
     #     utc_offset = request_json['utc_offset']
     # elif request_args and 'utc_offset' in request_args:
@@ -270,7 +282,7 @@ def cron_scheduler(request):
 
     args = {
         'start_dt': start_dt, 'end_dt': end_dt,
-        'variable': variable, 'limit': NEW_TASKS,
+        'region': region, 'variable': variable, 'limit': NEW_TASKS,
     }
 
     count = 0
@@ -281,7 +293,7 @@ def cron_scheduler(request):
     return Response(f'Exported {count} new assets', mimetype='text/plain')
 
 
-def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
+def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False):
     """Identify daily datetimes to ingest
 
     Parameters
@@ -290,6 +302,7 @@ def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
         Start date.
     end_dt : datetime
         End date, inclusive.
+    region : {'conus', 'global'}
     variable : str
     limit : int
     overwrite_flag : bool, optional
@@ -303,7 +316,7 @@ def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
     logging.info(f'  Start Date: {start_dt.strftime("%Y-%m-%d")}')
     logging.info(f'  End Date:   {end_dt.strftime("%Y-%m-%d")}')
 
-    task_id_re = re.compile('disalexi_daily_{variable}_(?P<date>\d{8})')
+    task_id_re = re.compile('disalexi_daily_{variable}_{region}_(?P<date>\d{8})')
     # asset_id_re = re.compile(
     #     ASSET_COLL_ID.split('projects/')[-1] + '/(?P<date>\d{8})$')
 
@@ -343,7 +356,11 @@ def ingest_dates(start_dt, end_dt, variable, limit, overwrite_flag=False):
     # For now, assume the collection exists
     # Bump end date for filterDate() calls
     logging.debug('\nChecking existing assets')
-    asset_date_coll = ee.ImageCollection(ASSET_COLL_ID)\
+    if region.lower() in ['conus']:
+        asset_coll_id = f'{ASSET_COLL_ID}_{region}_test'
+    elif region.lower() in ['global']:
+        asset_coll_id = f'{ASSET_COLL_ID}'
+    asset_date_coll = ee.ImageCollection(asset_coll_id)\
         .filterDate(start_dt.strftime('%Y-%m-%d'),
                     (end_dt + datetime.timedelta(days=1)).strftime('%Y-%m-%d'))
     asset_dates = set(asset_date_coll.aggregate_array('system:index').getInfo())
@@ -460,6 +477,8 @@ def arg_parse():
                  relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
     parser.add_argument(
+        '--region', required=True, choices=['conus', 'global'], help='Region')
+    parser.add_argument(
         '--delay', default=0, type=float,
         help='Delay (in seconds) between each export tasks')
     parser.add_argument(
@@ -498,20 +517,26 @@ if __name__ == '__main__':
         ee.Initialize()
 
     # Build the image collection if it doesn't exist
-    logging.debug(f'Image Collection: {ASSET_COLL_ID}')
-    if not ee.data.getInfo(ASSET_COLL_ID):
+    if args.region.lower() in ['conus']:
+        asset_coll_id = f'{ASSET_COLL_ID}_{args.region}_test'
+    elif args.region.lower() in ['global']:
+        asset_coll_id = f'{ASSET_COLL_ID}'
+    else:
+        raise ValueError(f'Unsupported region parameter: {args.region}')
+    logging.debug(f'Image Collection: {asset_coll_id}')
+    if not ee.data.getInfo(asset_coll_id):
         logging.info(f'\nImage collection does not exist and will be built'
-                     f'\n  {ASSET_COLL_ID}')
+                     f'\n  {asset_coll_id}')
         input('Press ENTER to continue')
-        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
+        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, asset_coll_id)
 
     ingest_dt_list = ingest_dates(
-        args.start, args.end, variable='insolation', limit=args.limit,
-        overwrite_flag=args.overwrite)
+        args.start, args.end, region=args.region, variable='insolation',
+        limit=args.limit, overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = ingest(ingest_dt, variable='insolation',
+        response = ingest(ingest_dt, region=args.region, variable='insolation',
                           overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
         time.sleep(args.delay)
