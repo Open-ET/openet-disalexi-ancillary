@@ -37,12 +37,18 @@ gcloud functions call disalexi-insolation-hourly --project openet-dri
 
 ### Scheduling the job
 
-Historical Ingest
+Daily update
+```
+gcloud scheduler jobs update http disalexi-insolation-hourly --schedule "5 20,22 * * SUN" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-hourly" --description "DisALEXI Hourly Insolation Update" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
+```
+
+Historical ingest from OpenET bucket archive
 ```
 gcloud scheduler jobs update http disalexi-insolation-hourly-historical --schedule "*/20 * * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-hourly?start=2016-01-01&end=2021-12-31" --description "DisALEXI Hourly Insolation Historical" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
 
-Daily Update
+### Archiving the geotiffs in the OpenET bucket
+
 ```
-gcloud scheduler jobs update http disalexi-insolation-hourly --schedule "42 7 * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-hourly" --description "DisALEXI Hourly Insolation Update" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 5 --attempt-deadline=540s --min-backoff=30s
+gsutil -m cp -n gs://meteo_insol_data/insoldata_tif_perband/*.tif gs://openet/disalexi/insoldata_tif/
 ```

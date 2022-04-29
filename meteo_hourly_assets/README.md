@@ -39,12 +39,13 @@ gcloud functions call disalexi-meteo-hourly --project openet-dri
 
 ### Scheduling the job
 
-Historical Ingest
+Daily update
 ```
-gcloud scheduler jobs update http disalexi-meteo-hourly --schedule "52 7 * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-meteo-hourly?start=2001-01-01&end=2021-12-31"" --description "DisALEXI Hourly Meteo Historical" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
+gcloud scheduler jobs update http disalexi-meteo-hourly --schedule "35 20,22 * * SUN" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-meteo-hourly" --description "DisALEXI 3-Hourly Meteo Update" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
 
-Daily Update
+Historical ingest from OpenET bucket archive
 ```
-gcloud scheduler jobs update http disalexi-meteo-hourly --schedule "42 7 * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-meteo-hourly" --description "DisALEXI Hourly Meteo Update" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 5 --attempt-deadline=540s --min-backoff=30s
+gcloud scheduler jobs update http disalexi-meteo-hourly --schedule "52 7 * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-meteo-hourly?start=2001-01-01&end=2021-12-31"" --description "DisALEXI 3-Hourly Meteo Historical" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
+
