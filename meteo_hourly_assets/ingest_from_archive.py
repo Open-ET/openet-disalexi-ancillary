@@ -10,20 +10,13 @@ from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
 from google.cloud import storage
-# from google.auth.transport.requests import AuthorizedSession
 
 import openet.core.utils as utils
 
-# CGM - Switch over to default credentials after historical images are loaded
-# if 'FUNCTION_REGION' in os.environ:
-#     # Assume code is deployed to a cloud function
-#     logging.debug(f'\nInitializing GEE using application default credentials')
-#     import google.auth
-#     credentials, project_id = google.auth.default(
-#         default_scopes=['https://www.googleapis.com/auth/earthengine'])
-#     ee.Initialize(credentials)
 if 'FUNCTION_REGION' in os.environ:
-    ee.Initialize(ee.ServiceAccountCredentials('', key_file='steel-melody-gee.json'))
+    credentials = ee.ServiceAccountCredentials(
+        '', key_file='../../keys/steel-melody-gee.json')
+    ee.Initialize(credentials)
 
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
 logging.getLogger('googleapiclient').setLevel(logging.ERROR)
@@ -48,13 +41,6 @@ BAND_NAME = {
     'vaporpressure': 'vp',
     'windspeed': 'windspeed',
 }
-# BUCKET_NAME = 'meteo_insol_data'
-# BUCKET_FOLDER = {
-#     'airpressure': 'airpressure_tif',
-#     'temperature': 'temperature_tif',
-#     'vaporpressure': 'vaporpressure_tif',
-#     'windspeed': 'windspeed_tif',
-# }
 BUCKET_NAME = 'openet'
 BUCKET_FOLDER = {
     'airpressure': 'disalexi/airpressure_tif',
@@ -112,6 +98,7 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
     # response = f'DisALEXI 3 hour {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}'
 
     # CGM - Assuming the "hours" in the file name as been set correctly
+    #   when the file was moved to the archive bucket
     tif_dt = (datetime.datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
               datetime.timedelta(hours=int(tgt_dt.hour)))
     # tif_dt = (datetime.datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
@@ -364,32 +351,36 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
         return []
-    logging.debug('\nDates (after filtering existing assets): {}'.format(
-        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
+    # logging.debug('\nDates (after filtering existing assets): {}'.format(
+    #     ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
 
     # Check bucket file list for available dates
-    # If we limited the date range to a year we could apply additional
-    #   prefix filtering which would speed up getting the bucket file list
     logging.debug('\nChecking bucket files')
     bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    bucket_file_list = [
-        blob.name for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER[variable]}')
-        if blob.name.endswith('.tif')]
+    bucket_file_list = []
+    for year in {test_dt.year for test_dt in test_dt_list}:
+        # logging.debug(f'  {year}')
+        prefix = f'{BUCKET_FOLDER[variable]}/{TIF_PREFIX[variable]}{year}'
+        bucket_files = [
+            blob.name for blob in bucket.list_blobs(prefix=prefix)
+            if blob.name.endswith('.tif')]
+        bucket_file_list.extend(bucket_files)
 
-    # DEADBEEF - This is a hack since the "hours" in the file name is not actually hours
+    # CGM - Assuming the "hours" in the file name as been set correctly
+    #   when the file was moved to the archive bucket
     bucket_date_list = [
         m.group('date').split('_') for f_name in bucket_file_list
         for m in [re.search(TIF_DT_RE, f_name)]]
     bucket_dates = {
         (datetime.datetime.strptime(date_str, '%Y%j') +
-         datetime.timedelta(hours=int(hour) * 3)).strftime(ISO_DT_FMT)
+         datetime.timedelta(hours=int(hour))).strftime(ISO_DT_FMT)
         for date_str, hour in bucket_date_list}
     # bucket_dates = {
     #     datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
     #     for f_name in bucket_file_list
     #     for m in [re.search(TIF_DT_RE, f_name)]}
 
-    # Switch date list to be dates that are missing
+    # Keep dates that have a source file in the bucket
     test_dt_list = [
         dt for dt in test_dt_list
         if overwrite_flag or dt.strftime(ISO_DT_FMT) in bucket_dates]

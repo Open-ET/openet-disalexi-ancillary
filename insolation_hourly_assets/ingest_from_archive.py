@@ -9,20 +9,13 @@ from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
 from google.cloud import storage
-# from google.auth.transport.requests import AuthorizedSession
 
 import openet.core.utils as utils
 
-# CGM - Switch over to default credentials after historical images are loaded
-# if 'FUNCTION_REGION' in os.environ:
-#     # Assume code is deployed to a cloud function
-#     logging.debug(f'\nInitializing GEE using application default credentials')
-#     import google.auth
-#     credentials, project_id = google.auth.default(
-#         default_scopes=['https://www.googleapis.com/auth/earthengine'])
-#     ee.Initialize(credentials)
 if 'FUNCTION_REGION' in os.environ:
-    ee.Initialize(ee.ServiceAccountCredentials('', key_file='steel-melody-gee.json'))
+    credentials = ee.ServiceAccountCredentials(
+        '', key_file='../../keys/steel-melody-gee.json')
+    ee.Initialize(credentials)
 
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
 logging.getLogger('googleapiclient').setLevel(logging.ERROR)
@@ -32,8 +25,6 @@ logging.getLogger('urllib3').setLevel(logging.INFO)
 ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
                 'projects/disalexi/insol_data/global_v001_hourly'
 ASSET_DT_FMT = '%Y%m%d%H'
-# BUCKET_NAME = 'meteo_insol_data'
-# BUCKET_FOLDER = 'insoldata_tif_perband'
 BUCKET_NAME = 'openet'
 BUCKET_FOLDER = 'disalexi/insoldata_tif'
 DATA_VERSION = 1
