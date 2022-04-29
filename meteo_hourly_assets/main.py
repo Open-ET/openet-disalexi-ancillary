@@ -10,20 +10,16 @@ from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
 from google.cloud import storage
-# from google.auth.transport.requests import AuthorizedSession
 
 import openet.core.utils as utils
 
-# CGM - Switch over to default credentials after historical images are loaded
-# if 'FUNCTION_REGION' in os.environ:
-#     # Assume code is deployed to a cloud function
-#     logging.debug(f'\nInitializing GEE using application default credentials')
-#     import google.auth
-#     credentials, project_id = google.auth.default(
-#         default_scopes=['https://www.googleapis.com/auth/earthengine'])
-#     ee.Initialize(credentials)
 if 'FUNCTION_REGION' in os.environ:
-    ee.Initialize(ee.ServiceAccountCredentials('', key_file='steel-melody-gee.json'))
+    # Assume code is deployed to a cloud function
+    logging.debug(f'\nInitializing GEE using application default credentials')
+    import google.auth
+    credentials, project_id = google.auth.default(
+        default_scopes=['https://www.googleapis.com/auth/earthengine'])
+    ee.Initialize(credentials)
 
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
 logging.getLogger('googleapiclient').setLevel(logging.ERROR)
@@ -62,7 +58,7 @@ NEW_TASKS = 300
 # Maximum number of queued tasks (intentionally not setting to 3000)
 MAX_TASKS = 1000
 # NODATA_VALUE = -9999
-START_MONTH_OFFSET = 3
+START_MONTH_OFFSET = 4
 END_MONTH_OFFSET = 0
 STORAGE_CLIENT = storage.Client()
 TIF_PREFIX = {
@@ -184,13 +180,23 @@ def cron_scheduler(request):
     request_json = request.get_json(silent=True)
     request_args = request.args
 
-    if request_json and 'variable' in request_json:
-        variable = request_json['variable']
+    if request_json and 'variables' in request_json:
+        variables = request_json['variables'].split(',')
     elif request_args and 'variable' in request_args:
-        variable = request_args['variable']
+        variables = request_args['variables'].split(',')
     else:
-        abort(404, description='variable must be specified')
-    logging.info(f'Variable: {variable}')
+        variables = VARIABLES[:]
+        # abort(404, description='variables must be specified')
+    logging.info(f'Variables: {", ".join(variables)}')
+
+    # TODO: Add support for hours parameter
+    hours = HOURS[:]
+    # if request_json and 'hours' in request_json:
+    #     hours = request_json['hours']
+    # elif request_args and 'hours' in request_args:
+    #     hours = request_args['hours']
+    # else:
+    #     hours = '0-7'
 
     # Default start and end date to None if not set
     if request_json and 'start' in request_json:
@@ -248,17 +254,15 @@ def cron_scheduler(request):
     else:
         abort(404, description='Both start and end date must be specified')
 
-    args = {
-        'start_dt': start_dt, 'end_dt': end_dt,
-        'variable': variable,
-        'hours': HOURS,
-        'limit': NEW_TASKS,
-    }
-
     count = 0
-    for tgt_dt in ingest_dates(**args):
-        ingest(tgt_dt, variable, overwrite_flag=True)
-        count += 1
+    for variable in variables:
+        logging.info(f'Variable: {variable}')
+        args = {
+            'start_dt': start_dt, 'end_dt': end_dt, 'variable': variable,
+            'hours': hours, 'limit': NEW_TASKS}
+        for tgt_dt in ingest_dates(**args):
+            ingest(tgt_dt, variable, overwrite_flag=True)
+            count += 1
 
     return Response(f'Ingested {count} new assets', mimetype='text/plain')
 
