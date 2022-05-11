@@ -396,9 +396,9 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
 
     # Limit the number of dates returned to the number of open queue spots
     if limit:
-        new_tasks = min(MAX_TASKS - len(task_id_list), limit)
-        logging.info(f'Date count:    {len(test_dt_list)}')
-        logging.info(f'Date limit:    {limit}')
+        new_tasks = min(max(MAX_TASKS - len(task_id_list), 0), limit)
+        logging.debug(f'Date count:    {len(test_dt_list)}')
+        logging.debug(f'Date limit:    {limit}')
         logging.info(f'Queued tasks:  {task_count}')
         logging.info(f'Limited dates: {new_tasks}')
         test_dt_list = test_dt_list[:new_tasks]

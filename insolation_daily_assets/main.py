@@ -28,8 +28,13 @@ logging.getLogger('googleapiclient').setLevel(logging.ERROR)
 logging.getLogger('requests').setLevel(logging.INFO)
 logging.getLogger('urllib3').setLevel(logging.INFO)
 
-ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
-                'projects/disalexi/insol_data/global_v001_daily'
+# ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
+#                 'projects/disalexi/insol_data/global_v001_daily'
+ASSET_COLL_FOLDER = 'projects/earthengine-legacy/assets/projects/disalexi/insol_data'
+ASSET_COLL_NAME = {
+    'global': 'global_v001_daily',
+    'conus': 'global_v001_daily_conus',
+}
 ASSET_DT_FMT = '%Y%m%d'
 SOURCE_COLL_ID = 'projects/earthengine-legacy/assets/' \
                  'projects/disalexi/insol_data/global_v001_hourly'
@@ -62,11 +67,9 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
     logging.info(f'DisALEXI daily {variable} - {tgt_dt.strftime("%Y-%m-%d")}')
     # response = f'DisALEXI daily {variable} - {tgt_dt.strftime("%Y-%m")}'
 
-    if region.lower() in ['conus']:
-        asset_coll_id = f'{ASSET_COLL_ID}_{region}_test'
-    elif region.lower() in ['global']:
-        asset_coll_id = f'{ASSET_COLL_ID}'
-    else:
+    try:
+        asset_coll_id = f'{ASSET_COLL_FOLDER}/{ASSET_COLL_NAME[region]}'
+    except KeyError:
         raise ValueError(f'Unsupported region parameter: {region}')
     asset_id = f'{asset_coll_id}/{tgt_dt.strftime(ASSET_DT_FMT)}'
 
@@ -356,10 +359,10 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
     # For now, assume the collection exists
     # Bump end date for filterDate() calls
     logging.debug('\nChecking existing assets')
-    if region.lower() in ['conus']:
-        asset_coll_id = f'{ASSET_COLL_ID}_{region}_test'
-    elif region.lower() in ['global']:
-        asset_coll_id = f'{ASSET_COLL_ID}'
+    try:
+        asset_coll_id = f'{ASSET_COLL_FOLDER}/{ASSET_COLL_NAME[region]}'
+    except KeyError:
+        raise ValueError(f'Unsupported region parameter: {region}')
     asset_date_coll = ee.ImageCollection(asset_coll_id)\
         .filterDate(start_dt.strftime('%Y-%m-%d'),
                     (end_dt + datetime.timedelta(days=1)).strftime('%Y-%m-%d'))
@@ -381,9 +384,9 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
 
     # Limit the number of dates returned to the number of open queue spots
     if limit:
-        new_tasks = min(MAX_TASKS - len(task_id_list), limit)
-        logging.info(f'Date count:    {len(test_dt_list)}')
-        logging.info(f'Date limit:    {limit}')
+        new_tasks = min(max(MAX_TASKS - len(task_id_list), 0), limit)
+        logging.debug(f'Date count:    {len(test_dt_list)}')
+        logging.debug(f'Date limit:    {limit}')
         logging.info(f'Queued tasks:  {task_count}')
         logging.info(f'Limited dates: {new_tasks}')
         test_dt_list = test_dt_list[:new_tasks]
@@ -517,11 +520,9 @@ if __name__ == '__main__':
         ee.Initialize()
 
     # Build the image collection if it doesn't exist
-    if args.region.lower() in ['conus']:
-        asset_coll_id = f'{ASSET_COLL_ID}_{args.region}_test'
-    elif args.region.lower() in ['global']:
-        asset_coll_id = f'{ASSET_COLL_ID}'
-    else:
+    try:
+        asset_coll_id = f'{ASSET_COLL_FOLDER}/{ASSET_COLL_NAME[args.region]}'
+    except KeyError:
         raise ValueError(f'Unsupported region parameter: {args.region}')
     logging.debug(f'Image Collection: {asset_coll_id}')
     if not ee.data.getInfo(asset_coll_id):
