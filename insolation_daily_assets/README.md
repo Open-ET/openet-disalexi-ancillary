@@ -44,7 +44,7 @@ gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 7 5,15
 
 Historical Ingest
 ```
-gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 * * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-daily?start=2001-01-01&end=2021-12-31" --description "DisALEXI Daily Insolation Historical" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
+gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 0 * * *" --uri "https://us-central1-openet-dri.cloudfunctions.net/disalexi-insolation-daily?start=2001-01-01&end=2021-12-31" --description "DisALEXI Daily Insolation Historical" --http-method POST --time-zone "UTC" --project openet-dri --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
 
 

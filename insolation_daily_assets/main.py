@@ -8,20 +8,16 @@ import time
 from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
-# from google.auth.transport.requests import AuthorizedSession
 
 import openet.core.utils as utils
 
-# CGM - Switch over to default credentials after historical images are loaded
-# if 'FUNCTION_REGION' in os.environ:
-#     # Assume code is deployed to a cloud function
-#     logging.debug(f'\nInitializing GEE using application default credentials')
-#     import google.auth
-#     credentials, project_id = google.auth.default(
-#         default_scopes=['https://www.googleapis.com/auth/earthengine'])
-#     ee.Initialize(credentials)
 if 'FUNCTION_REGION' in os.environ:
-    ee.Initialize(ee.ServiceAccountCredentials('', key_file='steel-melody-gee.json'))
+    # Assume code is deployed to a cloud function
+    logging.debug(f'\nInitializing GEE using application default credentials')
+    import google.auth
+    credentials, project_id = google.auth.default(
+        default_scopes=['https://www.googleapis.com/auth/earthengine'])
+    ee.Initialize(credentials)
 
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
 logging.getLogger('googleapiclient').setLevel(logging.ERROR)
@@ -43,8 +39,8 @@ NEW_TASKS = 200
 # Maximum number of queued tasks (intentionally not setting to 3000)
 MAX_TASKS = 1000
 # NODATA_VALUE = -9999
-START_MONTH_OFFSET = 4
-END_MONTH_OFFSET = 0
+START_DAY_OFFSET = 120
+END_DAY_OFFSET = 3
 
 
 def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
@@ -245,13 +241,9 @@ def cron_scheduler(request):
     if not start_date and not end_date:
         today = datetime.datetime.today()
         start_dt = (datetime.datetime(today.year, today.month, today.day) -
-                    relativedelta(months=START_MONTH_OFFSET))
+                    relativedelta(days=START_DAY_OFFSET))
         end_dt = (datetime.datetime(today.year, today.month, today.day) -
-                  relativedelta(months=END_MONTH_OFFSET))
-        # start_dt = (datetime.datetime(today.year, today.month, today.day) -
-        #             relativedelta(days=START_DAY_OFFSET))
-        # end_dt = (datetime.datetime(today.year, today.month, today.day) -
-        #           relativedelta(days=END_DAY_OFFSET))
+                  relativedelta(days=END_DAY_OFFSET))
     elif start_date and end_date:
         # Only process custom range if start and end are both set
         # Limit the end date to the last full month date
@@ -290,7 +282,7 @@ def cron_scheduler(request):
 
     count = 0
     for tgt_dt in ingest_dates(**args):
-        ingest(tgt_dt, variable, overwrite_flag=True)
+        ingest(tgt_dt, region=region, variable=variable, overwrite_flag=True)
         count += 1
 
     return Response(f'Exported {count} new assets', mimetype='text/plain')
@@ -472,12 +464,12 @@ def arg_parse():
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
         default=(datetime.datetime(today.year, today.month, today.day) -
-                 relativedelta(months=START_MONTH_OFFSET)).strftime('%Y-%m-%d'),
+                 relativedelta(days=START_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='Start date (format YYYY-MM-DD)')
     parser.add_argument(
         '--end', type=utils.arg_valid_date, metavar='DATE',
         default=(datetime.datetime(today.year, today.month, today.day) -
-                 relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
+                 relativedelta(days=END_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
     parser.add_argument(
         '--region', required=True, choices=['conus', 'global'], help='Region')
@@ -532,12 +524,12 @@ if __name__ == '__main__':
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, asset_coll_id)
 
     ingest_dt_list = ingest_dates(
-        args.start, args.end, region=args.region, variable='insolation',
-        limit=args.limit, overwrite_flag=args.overwrite)
+        start_dt=args.start, end_dt=args.end, region=args.region,
+        variable='insolation', limit=args.limit, overwrite_flag=args.overwrite)
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = ingest(ingest_dt, region=args.region, variable='insolation',
-                          overwrite_flag=args.overwrite)
+        response = ingest(tgt_dt=ingest_dt, region=args.region,
+                          variable='insolation', overwrite_flag=args.overwrite)
         logging.info(f'  {response}')
         time.sleep(args.delay)
