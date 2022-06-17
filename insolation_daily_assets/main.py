@@ -80,9 +80,11 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
             try:
                 ee.data.deleteAsset(asset_id)
             except Exception as e:
+                logging.info(f'Error trying to delete the existing asset')
                 return f'{export_name} - An error occured while trying to '\
                        f'delete the existing asset, skipping\n{e}\n'
         else:
+            logging.info(f'The asset already exists and overwrite is False')
             return f'{export_name} - The asset already exists and overwrite '\
                    f'is False, skipping\n'
 
@@ -111,10 +113,13 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
         source_count == -1
 
     if source_count == -1:
+        logging.info(f'Unable to get source image count')
         return f'{export_name} - source image count error\n'
     if source_count == 0:
-        return f'{export_name} - source image does not exist\n'
+        logging.info(f'No source images')
+        return f'{export_name} - no source images\n'
     elif source_count < 24:
+        logging.info(f'Too few source images ({source_count}) for day')
         return f'{export_name} - too few source images ({source_count}) for day\n'
 
     # Use the first image for getting the image properties
@@ -145,7 +150,7 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
         asset_shape = '1440x720'
         asset_crs = 'EPSG:4326'
     elif region == 'conus':
-        # CGM - Matching transform of v004/v005 ALEXI
+        # CGM - Matching transform of v006 ALEXI
         asset_transform = [0.04, 0.0, -125.02, 0.0, -0.04, 49.78]
         asset_shape = '1456x625'
         asset_crs = 'EPSG:4326'
@@ -177,6 +182,7 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
         except Exception as e:
             logging.warning(f'Unhandled Exception: {e}')
             return f'Unhandled Exception: {e}'
+    logging.info(f'  Task ID: {task.id}')
 
     return f'{export_name} - {task.id}\n'
 
@@ -276,16 +282,22 @@ def cron_scheduler(request):
         abort(404, description='Both start and end date must be specified')
 
     args = {
-        'start_dt': start_dt, 'end_dt': end_dt,
-        'region': region, 'variable': variable, 'limit': NEW_TASKS,
+        'start_dt': start_dt,
+        'end_dt': end_dt,
+        'region': region,
+        'variable': variable,
+        'limit': NEW_TASKS,
     }
 
+    response = ''
     count = 0
     for tgt_dt in ingest_dates(**args):
-        ingest(tgt_dt, region=region, variable=variable, overwrite_flag=True)
+        response += ingest(tgt_dt, region=region, variable=variable,
+                           overwrite_flag=True)
         count += 1
 
-    return Response(f'Exported {count} new assets', mimetype='text/plain')
+    # response += f'Exported {count} new assets\n'
+    return Response(response, mimetype='text/plain')
 
 
 def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False):

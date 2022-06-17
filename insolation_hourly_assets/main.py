@@ -213,16 +213,21 @@ def cron_scheduler(request):
         abort(404, description='Both start and end date must be specified')
 
     args = {
-        'start_dt': start_dt, 'end_dt': end_dt, 'variable': variable,
-        'hours': hours, 'limit': NEW_TASKS,
+        'start_dt': start_dt,
+        'end_dt': end_dt,
+        'variable': variable,
+        'hours': hours,
+        'limit': NEW_TASKS,
     }
 
+    response = ''
     count = 0
     for tgt_dt in ingest_dates(**args):
-        ingest(tgt_dt=tgt_dt, variable=variable, overwrite_flag=True)
+        response += ingest(tgt_dt=tgt_dt, variable=variable, overwrite_flag=True)
         count += 1
 
-    return Response(f'Ingested {count} new assets', mimetype='text/plain')
+    # response = f'Ingested {count} new assets\n'
+    return Response(response, mimetype='text/plain')
 
 
 def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False):
