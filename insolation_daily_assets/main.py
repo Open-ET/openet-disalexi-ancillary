@@ -184,6 +184,7 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
             return f'Unhandled Exception: {e}'
     logging.info(f'  Task ID: {task.id}')
 
+    logging.info(f'{export_name} - {task.id}')
     return f'{export_name} - {task.id}\n'
 
 

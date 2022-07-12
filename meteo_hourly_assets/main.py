@@ -158,6 +158,7 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
         return f'{export_name} - could not start ingest task'
         # abort(500, description=f'{export_name} - could not start ingest task')
 
+    logging.info(f'{export_name} - {task["id"]}')
     return f'{export_name} - {task["id"]}\n'
 
 
