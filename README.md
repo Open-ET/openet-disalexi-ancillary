@@ -1,2 +1,3 @@
 # openet-disalexi-ancillary
-DisALEXI Ancillary Assets
+
+Cloud functions for ingesting DisALEXI insolation and meteorology assets

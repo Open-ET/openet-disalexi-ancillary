@@ -17,7 +17,8 @@ if 'FUNCTION_REGION' in os.environ:
     logging.debug(f'\nInitializing GEE using application default credentials')
     import google.auth
     credentials, project_id = google.auth.default(
-        default_scopes=['https://www.googleapis.com/auth/earthengine'])
+        default_scopes=['https://www.googleapis.com/auth/earthengine']
+    )
     ee.Initialize(credentials)
 
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
@@ -32,6 +33,8 @@ BUCKET_NAME = 'meteo_insol_data'
 BUCKET_FOLDER = 'insoldata_tif_perband'
 # BUCKET_NAME = 'openet'
 # BUCKET_FOLDER = 'disalexi/insoldata_tif'
+ARCHIVE_BUCKET_NAME = 'openet'
+ARCHIVE_BUCKET_FOLDER = 'disalexi/insoldata_tif'
 DATA_VERSION = 1
 ISO_DT_FMT = '%Y-%m-%dT%H00'
 # Maximum number of new tasks that can be submitted in a function call
@@ -120,6 +123,15 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
     if task is None:
         return f'{export_name} - could not start ingest task'
         # abort(500, description=f'{export_name} - could not start ingest task')
+
+    src_bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
+    src_blob = src_bucket.blob(f'{BUCKET_FOLDER}/{tif_name}')
+    if src_blob and src_blob.exists():
+        logging.debug('  Archiving file')
+        dst_bucket = STORAGE_CLIENT.bucket(ARCHIVE_BUCKET_NAME)
+        blob_copy = src_bucket.copy_blob(
+            src_blob, dst_bucket, f'{ARCHIVE_BUCKET_FOLDER}/{tif_name}'
+        )
 
     logging.info(f'{export_name} - {task["id"]}')
     return f'{export_name} - {task["id"]}\n'

@@ -2,7 +2,6 @@ import argparse
 import datetime
 import logging
 import os
-import pprint
 import re
 import time
 
@@ -18,7 +17,8 @@ if 'FUNCTION_REGION' in os.environ:
     logging.debug(f'\nInitializing GEE using application default credentials')
     import google.auth
     credentials, project_id = google.auth.default(
-        default_scopes=['https://www.googleapis.com/auth/earthengine'])
+        default_scopes=['https://www.googleapis.com/auth/earthengine']
+    )
     ee.Initialize(credentials)
 
 logging.getLogger('earthengine-api').setLevel(logging.INFO)
@@ -51,6 +51,8 @@ BUCKET_FOLDER = {
     'vaporpressure': 'vaporpressure_tif',
     'windspeed': 'windspeed_tif',
 }
+ARCHIVE_BUCKET_NAME = 'openet'
+ARCHIVE_BUCKET_FOLDER = 'disalexi'
 DATA_VERSION = 1
 ISO_DT_FMT = '%Y-%m-%dT%H00'
 # Maximum number of new tasks that can be submitted in a function call
@@ -157,6 +159,31 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
     if task is None:
         return f'{export_name} - could not start ingest task'
         # abort(500, description=f'{export_name} - could not start ingest task')
+
+    src_bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
+    src_blob = src_bucket.blob(f'{BUCKET_FOLDER[variable]}/{tif_name}')
+    if src_blob and src_blob.exists():
+        logging.debug('  Archiving file')
+        dst_bucket = STORAGE_CLIENT.bucket(ARCHIVE_BUCKET_NAME)
+        dst_blob_name = f'{ARCHIVE_BUCKET_FOLDER}/{BUCKET_FOLDER[variable]}/{tif_name}'
+        # Rename from 3 hour index to hour
+        if tif_name.endswith('07.tif'):
+            dst_blob_name = dst_blob_name.replace('_07.tif', '_21.tif')
+        elif tif_name.endswith('06.tif'):
+            dst_blob_name = dst_blob_name.replace('_06.tif', '_18.tif')
+        elif tif_name.endswith('05.tif'):
+            dst_blob_name = dst_blob_name.replace('_05.tif', '_15.tif')
+        elif tif_name.endswith('04.tif'):
+            dst_blob_name = dst_blob_name.replace('_04.tif', '_12.tif')
+        elif tif_name.endswith('03.tif'):
+            dst_blob_name = dst_blob_name.replace('_03.tif', '_09.tif')
+        elif tif_name.endswith('02.tif'):
+            dst_blob_name = dst_blob_name.replace('_02.tif', '_06.tif')
+        elif tif_name.endswith('01.tif'):
+            dst_blob_name = dst_blob_name.replace('_01.tif', '_03.tif')
+        elif tif_name.endswith('00.tif'):
+            dst_blob_name = dst_blob_name.replace('_00.tif', '_00.tif')
+        blob_copy = src_bucket.copy_blob(src_blob, dst_bucket, dst_blob_name)
 
     logging.info(f'{export_name} - {task["id"]}')
     return f'{export_name} - {task["id"]}\n'

@@ -3,14 +3,13 @@ import calendar
 from google.cloud import storage
 
 # storage_client = storage.Client()
-storage_client = storage.Client.from_service_account_json('./keys/openet-dri-gee.json')
+storage_client = storage.Client.from_service_account_json('../../keys/openet-dri-gee.json')
 src_bucket = storage_client.bucket('meteo_insol_data')
 dst_bucket = storage_client.bucket('openet')
 dst_folder = 'disalexi'
 
 # for year in range(2001, 2022):
-# for year in [2022]:
-for year in [2021, 2022]:
+for year in [2022]:
     print(f'\nYear: {year}')
     for folder, prefix in [['airpressure_tif', 'psfc_series'],
                            ['temperature_tif', 't2_series'],
@@ -31,7 +30,7 @@ for year in [2021, 2022]:
             src_blob_year = int(src_blob.name.split('_')[-2][:4])
             src_blob_doy = int(src_blob.name.split('_')[-2][4:])
             if src_blob_doy > 365 and not calendar.isleap(src_blob_year):
-                print(f'{src_blob.name} - invalid doy')
+                print(f'{src_blob.name} - invalid doy, skipping')
                 continue
 
             # Rename from 3 hour index to hour
@@ -55,7 +54,10 @@ for year in [2021, 2022]:
                 continue
 
             if f'{dst_folder}/{dst_blob_name}' in dst_files:
-                # print('file already in bucket - skipping')
+                print(f'{src_blob.name} - file already in bucket, skipping')
                 continue
 
-            # blob_copy = src_bucket.copy_blob(src_blob, dst_bucket, f'{dst_folder}/{dst_blob_name}')
+            print(f'{src_blob.name} - copying')
+            blob_copy = src_bucket.copy_blob(
+                src_blob, dst_bucket, f'{dst_folder}/{dst_blob_name}'
+            )
