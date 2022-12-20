@@ -5,6 +5,7 @@ import os
 import re
 import time
 
+from dateutil.parser import parse
 from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
@@ -34,8 +35,8 @@ NEW_TASKS = 300
 # Maximum number of queued tasks (intentionally not setting to 3000)
 MAX_TASKS = 1000
 # NODATA_VALUE = -9999
-START_MONTH_OFFSET = 3
-END_MONTH_OFFSET = 0
+# START_MONTH_OFFSET = 3
+# END_MONTH_OFFSET = 0
 STORAGE_CLIENT = storage.Client()
 TIF_PREFIX = 'insol_series_'
 TIF_NAME_FMT = '{prefix}{date}.tif'
@@ -161,17 +162,7 @@ def cron_scheduler(request):
     else:
         end_date = None
 
-    if not start_date and not end_date:
-        today = datetime.datetime.today()
-        start_dt = (datetime.datetime(today.year, today.month, today.day) -
-                    relativedelta(months=START_MONTH_OFFSET))
-        end_dt = (datetime.datetime(today.year, today.month, today.day) -
-                  relativedelta(months=END_MONTH_OFFSET))
-        # start_dt = (datetime.datetime(today.year, today.month, today.day) -
-        #             relativedelta(days=START_DAY_OFFSET))
-        # end_dt = (datetime.datetime(today.year, today.month, today.day) -
-        #           relativedelta(days=END_DAY_OFFSET))
-    elif start_date and end_date:
+    if start_date and end_date:
         # Only process custom range if start and end are both set
         # Limit the end date to the last full month date
         try:
@@ -199,9 +190,17 @@ def cron_scheduler(request):
         #     logging.debug('Start Date: {} - no images before '
         #                   '2001-01-01'.format(start_dt.strftime('%Y-%m-%d')))
         #     start_dt = datetime.datetime(2001, 1, 1)
-    else:
-        abort(404, description='Both start and end date must be specified')
-
+    # elif not start_date and not end_date:
+    #     today = datetime.datetime.today()
+    #     start_dt = (datetime.datetime(today.year, today.month, today.day) -
+    #                 relativedelta(months=START_MONTH_OFFSET))
+    #     end_dt = (datetime.datetime(today.year, today.month, today.day) -
+    #               relativedelta(months=END_MONTH_OFFSET))
+    #     # start_dt = (datetime.datetime(today.year, today.month, today.day) -
+    #     #             relativedelta(days=START_DAY_OFFSET))
+    #     # end_dt = (datetime.datetime(today.year, today.month, today.day) -
+    #     #           relativedelta(days=END_DAY_OFFSET))    else:
+    #     abort(404, description='Both start and end date must be specified')
     args = {
         'start_dt': start_dt, 'end_dt': end_dt,
         'variable': variable, 'limit': NEW_TASKS,
@@ -259,13 +258,15 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     task_count = len(task_id_list)
     task_dates = {
         datetime.datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
-        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m}
+        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
+    }
     # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)]
+        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)
+    ]
     if not test_dt_list:
         logging.info('All dates are queued for export')
         return []
@@ -302,12 +303,14 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or (dt.strftime(ASSET_DT_FMT) not in asset_dates)]
+        if overwrite_flag or (dt.strftime(ASSET_DT_FMT) not in asset_dates)
+    ]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
         return []
     logging.debug('\nDates (after filtering existing assets): {}'.format(
-        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
+        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
+    ))
     # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check bucket by year and only for missing years
@@ -337,12 +340,14 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
 
     # Keep dates that have a bucket file
     test_dt_list = [
-        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates]
+        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates
+    ]
     if not test_dt_list:
         logging.info('No dates to process after filtering bucket files')
         return []
     logging.debug('\nDates (after filtering bucket files): {}'.format(
-        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
+        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
+    ))
 
     # Limit the number of dates returned to the number of open queue spots
     if limit:
@@ -416,7 +421,8 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
 
     task_list = sorted(
         [task for task in task_list if task['state'] in states],
-        key=lambda t: (t['state'], t['description'], t['id']))
+        key=lambda t: (t['state'], t['description'], t['id'])
+    )
     # task_list = sorted([
     #     [t['state'], t['description'], t['id']] for t in task_list
     #     if t['state'] in states])
@@ -425,23 +431,34 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
     return {task['description']: task for task in task_list}
 
 
+def arg_valid_date(date_str):
+    DATE_FORMATS = ['%Y%j', '%Y-%m-%d']
+    for dt_format in DATE_FORMATS:
+        try:
+            d = datetime.datetime.strptime(date_str, dt_format)
+            return d
+        except ValueError:
+            pass
+    raise ValueError(f'date "{date_str}" could not be parsed')
+
+
 def arg_parse():
     """"""
-    today = datetime.date.today()
+    # today = datetime.date.today()
 
     parser = argparse.ArgumentParser(
         description='Generate DisALEXI hourly insolation assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        '--start', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime.datetime(today.year, today.month, today.day) -
-                 relativedelta(months=START_MONTH_OFFSET)).strftime('%Y-%m-%d'),
-        help='Start date (format YYYY-MM-DD)')
+        '--start', metavar='DATE', type=arg_valid_date,
+        # default=(datetime.datetime(today.year, today.month, today.day) -
+        #          relativedelta(months=START_MONTH_OFFSET)).strftime('%Y-%m-%d'),
+        help='Start date')
     parser.add_argument(
-        '--end', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime.datetime(today.year, today.month, today.day) -
-                 relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
-        help='End date (format YYYY-MM-DD)')
+        '--end', metavar='DATE', type=arg_valid_date,
+        # default=(datetime.datetime(today.year, today.month, today.day) -
+        #          relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
+        help='End date (exclusive)')
     parser.add_argument(
         '--hours', default=",".join(map(str, HOURS)),
         help=f'Hour timesteps')
@@ -492,9 +509,10 @@ if __name__ == '__main__':
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
     ingest_dt_list = ingest_dates(
-        args.start, args.end, variable='insolation',
-        hours=list(map(int, args.hours.split(','))), limit=args.limit,
-        overwrite_flag=args.overwrite)
+        start_dt=args.start, end_dt=args.end,
+        variable='insolation', hours=list(map(int, args.hours.split(','))),
+        limit=args.limit, overwrite_flag=args.overwrite,
+    )
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
