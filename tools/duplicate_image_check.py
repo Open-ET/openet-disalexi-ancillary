@@ -67,8 +67,8 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
                     logging.debug(f'  {item}')
                     hourly_dates[item.split('_')[0]].append(item.split('_')[1])
 
-            for date, hours in sorted(hourly_dates.items()):
-                hours_str = ", ".join([str(int(h)) for h in sorted(hours)])
+            for date, times in sorted(hourly_dates.items()):
+                hours_str = ", ".join([str(int(h)) for h in sorted(times)])
                 logging.info(f'{date}  {hours_str}')
 
 
@@ -92,6 +92,7 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
             for year in years:
                 logging.debug(f'  {year}')
 
+                meteo_var_dates = defaultdict(list)
                 for hour in hr3:
                     logging.debug(f'3-Hour: {hour:>2d}')
                     meteo_coll = ee.ImageCollection(meteo_coll_id)\
@@ -100,12 +101,12 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
                         .select([band_name], ['b0'])
                     output = duplicate_dates(meteo_coll, conus_flag, ignore_dec31_flag)
 
-                    meteo_var_dates = defaultdict(list)
                     for item in output:
                         meteo_var_dates[item.split('_')[0]].append(item.split('_')[1])
-                    for date, hours in sorted(meteo_var_dates.items()):
-                        hours_str = ", ".join([str(int(h)) for h in sorted(hours)])
-                        logging.info(f'{date}  {hours_str}')
+
+                for date, times in sorted(meteo_var_dates.items()):
+                    hours_str = ", ".join([str(int(h)) for h in sorted(times)])
+                    logging.info(f'{date}  {hours_str}')
 
 
 def duplicate_dates(coll, conus_flag=True, ignore_dec31_flag=True):
