@@ -50,5 +50,5 @@ gcloud scheduler jobs update http disalexi-insolation-hourly-historical --schedu
 ### Archiving the geotiffs in the OpenET bucket
 
 ```
-gsutil -m cp -n gs://meteo_insol_data/insoldata_tif_perband/*.tif gs://openet/disalexi/insoldata_tif/
+gsutil -m cp gs://meteo_insol_data/insoldata_tif_perband/insol_series_2022*.tif gs://openet/disalexi/insoldata_tif/
 ```

@@ -93,8 +93,10 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
                    f'is False, skipping\n'
 
     properties = {
+        'date': tgt_dt.strftime('%Y-%m-%d'),
         'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
-        # 'doy': int(tgt_dt.strftime('%j')),
+        'doy': int(tgt_dt.strftime('%j')),
+        'hour': int(tgt_dt.strftime('%H')),
         'insolation_version': DATA_VERSION,
         'source': bucket_path,
         'units': 'W m-2',
@@ -275,7 +277,8 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
         logging.info('Empty date range')
         return []
     # logging.info('\nTest dates: {}'.format(
-    #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
+    # ))
     # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if any of the needed dates are currently being ingested
@@ -283,17 +286,20 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     #   from running to done before the asset list is retrieved.
     task_id_list = [
         desc.replace('\nAsset ingestion: ', '')
-        for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()]
+        for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()
+    ]
     task_count = len(task_id_list)
     task_dates = {
         datetime.datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
-        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m}
+        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
+    }
     # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)]
+        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)
+    ]
     if not test_dt_list:
         logging.info('All dates are queued for export')
         return []
@@ -330,7 +336,8 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or (dt.strftime(ASSET_DT_FMT) not in asset_dates)]
+        if overwrite_flag or (dt.strftime(ASSET_DT_FMT) not in asset_dates)
+    ]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
         return []
@@ -356,16 +363,10 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
         bucket_dates.update(bucket_date_list)
     # logging.info(f'Bucket dates: {len(bucket_dates)}')
 
-    # logging.debug('\nChecking bucket files')
-    # bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    # bucket_dates = {
-    #     datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
-    #     for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER}/{TIF_PREFIX}')
-    #     for m in [re.search(TIF_DT_RE, blob.name)] if m}
-
     # Keep dates that have a bucket file
     test_dt_list = [
-        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates]
+        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates
+    ]
     if not test_dt_list:
         logging.info('No dates to process after filtering bucket files')
         return []
@@ -444,10 +445,12 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
 
     task_list = sorted(
         [task for task in task_list if task['state'] in states],
-        key=lambda t: (t['state'], t['description'], t['id']))
+        key=lambda t: (t['state'], t['description'], t['id'])
+    )
     # task_list = sorted([
     #     [t['state'], t['description'], t['id']] for t in task_list
-    #     if t['state'] in states])
+    #     if t['state'] in states]
+    # )
 
     # Convert the task list to a dictionary with the task name as the key
     return {task['description']: task for task in task_list}
@@ -522,7 +525,8 @@ if __name__ == '__main__':
     ingest_dt_list = ingest_dates(
         start_dt=args.start, end_dt=args.end, variable='insolation',
         hours=list(map(int, args.hours.split(','))), limit=args.limit,
-        overwrite_flag=args.overwrite)
+        overwrite_flag=args.overwrite,
+    )
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')

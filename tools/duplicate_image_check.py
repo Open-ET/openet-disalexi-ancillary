@@ -1,5 +1,6 @@
 import argparse
 from collections import defaultdict
+from datetime import datetime
 import logging
 import pprint
 import time
@@ -67,20 +68,25 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
                     logging.debug(f'  {item}')
                     hourly_dates[item.split('_')[0]].append(item.split('_')[1])
 
-            for date, times in sorted(hourly_dates.items()):
+            # Call the second variable times to avoid conflict with "hours" input
+            for date_str, times in sorted(hourly_dates.items()):
+                doy_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%j')
                 hours_str = ", ".join([str(int(h)) for h in sorted(times)])
-                logging.info(f'{date}  {hours_str}')
+                logging.info(f'{date_str} ({doy_str})  {hours_str}')
 
 
     # Daily Insolation
     if insol_daily_flag:
         logging.info('\nDaily Insolation')
-        insol_coll = ee.ImageCollection(insol_daily_coll_id)\
-            .filterDate(start_date, end_date)\
-            .select([insol_daily_band_name], ['b0'])
-        output = duplicate_dates(insol_coll, conus_flag, ignore_dec31_flag)
-        if output:
-            logging.info(output)
+        for year in years:
+            logging.debug(f'{year}')
+            insol_coll = ee.ImageCollection(insol_daily_coll_id)\
+                .filterDate(f'{year}-01-01', f'{year+1}-01-01')\
+                .filterDate(start_date, end_date)\
+                .select([insol_daily_band_name], ['b0'])
+            output = duplicate_dates(insol_coll, conus_flag, ignore_dec31_flag)
+            if output:
+                logging.info(output)
 
 
     # Meteo 3 hour variables
@@ -104,9 +110,10 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
                     for item in output:
                         meteo_var_dates[item.split('_')[0]].append(item.split('_')[1])
 
-                for date, times in sorted(meteo_var_dates.items()):
+                for date_str, times in sorted(meteo_var_dates.items()):
+                    doy_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%j')
                     hours_str = ", ".join([str(int(h)) for h in sorted(times)])
-                    logging.info(f'{date}  {hours_str}')
+                    logging.info(f'{date_str} ({doy_str})  {hours_str}')
 
 
 def duplicate_dates(coll, conus_flag=True, ignore_dec31_flag=True):
@@ -126,29 +133,41 @@ def duplicate_dates(coll, conus_flag=True, ignore_dec31_flag=True):
     if conus_flag:
         geom = ee.Geometry.BBox(-125, 25, -65, 50)
     else:
-        geom = ee.Geometry.BBox(-125, 25, 145, 50)
+        geom = ee.Geometry.BBox(-125, 20, 145, 50)
 
+    # Check that images are different and primary image is not all nodata
     def compute_diff(ftr):
         primary_img = ee.Image(ftr.get('primary'))
         secondary_img = ee.Image(ftr.get('secondary'))
         ftr_date = ee.Date(primary_img.get('system:time_start'))
-        diff_img = primary_img.subtract(secondary_img).abs()
-        sum = diff_img.reduceRegion(
-            reducer=ee.Reducer.sum(),
-            geometry=geom,
-            crs='EPSG:4326',
-            crsTransform=[0.25, 0, -180,0, -0.25, 90],
-            bestEffort=False,
-        )
+        diff_img = primary_img.unmask(0).subtract(secondary_img.unmask(0)).abs()
+        output = primary_img.unmask(-9999).rename('image')\
+            .addBands([diff_img.rename('diff')])\
+            .reduceRegion(
+                reducer=ee.Reducer.mean().combine(ee.Reducer.sum(), '', True),
+                geometry=geom,
+                crs='EPSG:4326',
+                crsTransform=[0.25, 0, -180,0, -0.25, 90],
+                bestEffort=False,
+            )
         return ee.Feature(
-            None, {'sum': sum.get('b0'), 'date': ftr_date.format('yyyy-MM-dd_HH')}
+            None,
+            {
+                'image_mean': output.get('image_mean'),
+                'diff_sum': output.get('diff_sum'),
+                'date': ftr_date.format('yyyy-MM-dd_HH'),
+            }
         )
+
+    # pprint.pprint(join_coll.map(compute_diff).getInfo())
+    # input('ENTER')
 
     for i in range(6):
         date_list = []
         try:
             date_list = ee.FeatureCollection(join_coll.map(compute_diff))\
-                .filterMetadata('sum', 'less_than', 0.001)\
+                .filter(ee.Filter.lessThan('diff_sum', 0.001))\
+                .filter(ee.Filter.greaterThan('image_mean', -9998))\
                 .aggregate_array('date')\
                 .getInfo()
             if date_list:

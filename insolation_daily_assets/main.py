@@ -125,12 +125,14 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
 
     # Use the first image for getting the image properties
     # Assume all properties for the day will be the same
+    # Might want to get the max date_ingested from the collection instead of the first
     source_img = source_coll.first()
     properties = {
-        'system:time_start': utils.millis(tgt_dt),
+        'date': tgt_dt.strftime('%Y-%m-%d'),
         'date_ingested': source_img.get('date_ingested'),
-        'doy': tgt_dt.strftime('%j'),
+        'doy': int(tgt_dt.strftime('%j')),
         'insolation_version': source_img.get('insolation_version'),
+        'system:time_start': utils.millis(tgt_dt),
         'units': source_img.get('units'),
         'utc_offset': utc_offset,
     }
@@ -294,8 +296,9 @@ def cron_scheduler(request):
     response = ''
     count = 0
     for tgt_dt in ingest_dates(**args):
-        response += ingest(tgt_dt, region=region, variable=variable,
-                           overwrite_flag=True)
+        response += ingest(
+            tgt_dt, region=region, variable=variable, overwrite_flag=True
+        )
         count += 1
 
     # response += f'Exported {count} new assets\n'
@@ -327,7 +330,8 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
 
     task_id_re = re.compile('disalexi_daily_{variable}_{region}_(?P<date>\d{8})')
     # asset_id_re = re.compile(
-    #     ASSET_COLL_ID.split('projects/')[-1] + '/(?P<date>\d{8})$')
+    #     ASSET_COLL_ID.split('projects/')[-1] + '/(?P<date>\d{8})$'
+    # )
 
     # Start with a list of dates to check
     test_dt_list = list(date_range(start_dt, end_dt, skip_leap_days=False))
@@ -335,7 +339,8 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
         logging.info('Empty date range')
         return []
     # logging.info('\nTest dates: {}'.format(
-    #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
+    # ))
     # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if any of the needed dates are currently being ingested
@@ -343,23 +348,27 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
     #   from running to done before the asset list is retrieved.
     task_id_list = [
         desc.replace('\nAsset ingestion: ', '')
-        for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()]
+        for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()
+    ]
     task_count = len(task_id_list)
     task_dates = {
         datetime.datetime.strptime(m.group('date'), '%Y%m%d').strftime('%Y-%m-%d')
-        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m}
+        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
+    }
     # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime('%Y-%m-%d') not in task_dates]
+        if overwrite_flag or dt.strftime('%Y-%m-%d') not in task_dates
+    ]
     if not test_dt_list:
         logging.info('All dates are queued for export')
         return []
     # else:
     #     logging.info('\nMissing asset dates: {}'.format(', '.join(
-    #         map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    #         map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
+    #     ))
 
     # Check if the assets already exist
     # For now, assume the collection exists
@@ -378,12 +387,14 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_dates]
+        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_dates
+    ]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
         return []
     logging.debug('\nDates (after filtering existing assets): {}'.format(
-        ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+        ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
+    ))
 
     # TODO: Should the source collection be checked here to see if there are
     #   enough images?
@@ -459,10 +470,12 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
 
     task_list = sorted(
         [task for task in task_list if task['state'] in states],
-        key=lambda t: (t['state'], t['description'], t['id']))
+        key=lambda t: (t['state'], t['description'], t['id'])
+    )
     # task_list = sorted([
     #     [t['state'], t['description'], t['id']] for t in task_list
-    #     if t['state'] in states])
+    #     if t['state'] in states]
+    # )
 
     # Convert the task list to a dictionary with the task name as the key
     return {task['description']: task for task in task_list}
@@ -539,11 +552,14 @@ if __name__ == '__main__':
 
     ingest_dt_list = ingest_dates(
         start_dt=args.start, end_dt=args.end, region=args.region,
-        variable='insolation', limit=args.limit, overwrite_flag=args.overwrite)
+        variable='insolation', limit=args.limit, overwrite_flag=args.overwrite,
+    )
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-        response = ingest(tgt_dt=ingest_dt, region=args.region,
-                          variable='insolation', overwrite_flag=args.overwrite)
+        response = ingest(
+            tgt_dt=ingest_dt, region=args.region,
+            variable='insolation', overwrite_flag=args.overwrite,
+        )
         logging.info(f'  {response}')
         time.sleep(args.delay)

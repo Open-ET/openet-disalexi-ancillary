@@ -62,7 +62,7 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
             # if missing_dates:
             for missing_date in sorted(missing_dates):
                 missing_dt = datetime.strptime(missing_date, "%Y%m%d%H")
-                logging.info(f'{missing_dt.strftime("%Y-%m-%d  %H")}')
+                logging.info(f'{missing_dt.strftime("%Y-%m-%d (%j)  %H")}')
 
 
     # Daily Insolation
@@ -71,11 +71,11 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
         for year in years:
             logging.debug(f'{year}')
             target_dates = {
-                d.strftime('%Y%m%d%H')
+                d.strftime('%Y%m%d')
                 for d in dt_range(
                     datetime(year, 1, 1), datetime(year+1, 1, 1), hours=[0]
                 )
-                if d < datetime(2022, 11, 1)
+                # if d < datetime(2022, 11, 1)
             }
             insol_coll = ee.ImageCollection(insol_daily_coll_id)\
                 .filterDate(f'{year}-01-01', f'{year+1}-01-01')\
@@ -83,7 +83,7 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
             daily_dates = get_dates(insol_coll)
             missing_dates = target_dates - set(daily_dates)
             for missing_date in sorted(missing_dates):
-                missing_dt = datetime.strptime(missing_date, "%Y%m%d%H")
+                missing_dt = datetime.strptime(missing_date, "%Y%m%d")
                 logging.info(f'{missing_dt.strftime("%Y-%m-%d")}')
 
 
@@ -114,7 +114,7 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
                 # if missing_dates:
                 for missing_date in sorted(missing_dates):
                     missing_dt = datetime.strptime(missing_date, "%Y%m%d%H")
-                    logging.info(f'{missing_dt.strftime("%Y-%m-%d  %H")}')
+                    logging.info(f'{missing_dt.strftime("%Y-%m-%d (%j)  %H")}')
 
 
 def get_dates(coll):

@@ -102,7 +102,8 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
     logging.info(f'DisALEXI 3 hour {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
     # response = f'DisALEXI 3 hour {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}'
 
-    # DEADBEEF - This is a hack since the "hours" in the file name is not actually hours
+    # DEADBEEF - This is a hack since the "hours" in the file name for the files
+    #   in Yun's bucket is an index and is not actually hours
     tif_dt = (datetime.datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
               datetime.timedelta(hours=int(tgt_dt.hour) / 3))
     tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX[variable],
@@ -129,8 +130,10 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
                    f'is False, skipping\n'
 
     properties = {
+        'date': tgt_dt.strftime('%Y-%m-%d'),
         'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
-        # 'doy': int(tgt_dt.strftime('%j')),
+        'doy': int(tgt_dt.strftime('%j')),
+        'hour': int(tgt_dt.strftime('%H')),
         'meteo_version': DATA_VERSION,
         'source': bucket_path,
         'units': UNITS[variable],
@@ -321,8 +324,10 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     logging.info(f'  End Date:   {end_dt.strftime("%Y-%m-%d")}')
     logging.info(f'  Hours:      {", ".join(map(str, hours))}')
 
-    task_id_re = re.compile(f'Ingest image: "{ASSET_ROOT}/{ASSET_FOLDER[variable]}/'
-                            f'{ASSET_COLL_NAME}/(?P<date>\d{{10}})"')
+    task_id_re = re.compile(
+        f'Ingest image: "{ASSET_ROOT}/{ASSET_FOLDER[variable]}/'
+        f'{ASSET_COLL_NAME}/(?P<date>\d{{10}})"'
+    )
 
     # Start with a list of dates to check
     test_dt_list = list(hourly_date_range(start_dt, end_dt, hours=hours))
@@ -330,7 +335,8 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
         logging.info('Empty date range')
         return []
     # logging.info('\nTest dates: {}'.format(
-    #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    #     ', '.join(map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
+    # ))
     # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if any of the needed dates are currently being ingested
@@ -338,17 +344,20 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     #   from running to done before the asset list is retrieved.
     task_id_list = [
         desc.replace('\nAsset ingestion: ', '')
-        for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()]
+        for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()
+    ]
     task_count = len(task_id_list)
     task_dates = {
         datetime.datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
-        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m}
+        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
+    }
     # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)]
+        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)
+    ]
     if not test_dt_list:
         logging.info('All dates are queued for export')
         return []
@@ -385,44 +394,49 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_dates]
+        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_dates
+    ]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
         return []
     logging.debug('\nDates (after filtering existing assets): {}'.format(
-        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
+        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
+    ))
 
     # Check bucket file list for available dates
     # If we limited the date range to a year we could apply additional
     #   prefix filtering which would speed up getting the bucket file list
-    logging.debug('\nChecking bucket files')
+    logging.debug('\nChecking bucket files (by year)')
     bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    bucket_file_list = [
-        blob.name for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER[variable]}')
-        if blob.name.endswith('.tif')]
+    bucket_dates = set()
+    for year in {test_dt.year for test_dt in test_dt_list}:
+        # logging.debug(f'  {year}')
+        bucket_date_list = [
+            m.group('date').split('_')
+            for blob in bucket.list_blobs(
+                prefix=f'{BUCKET_FOLDER[variable]}/{TIF_PREFIX[variable]}{year}')
+            for m in [re.search(TIF_DT_RE, blob.name)]
+            # if blob.name.endswith('.tif')
+        ]
+        bucket_date_list = [
+            (datetime.datetime.strptime(date_str, '%Y%j') +
+             datetime.timedelta(hours=int(hour) * 3)).strftime(ISO_DT_FMT)
+            for date_str, hour in bucket_date_list
+        ]
+        # CGM - Check the bucket_dates against the test_dt_list before updating?
+        bucket_dates.update(bucket_date_list)
+    # logging.info(f'Bucket dates: {len(bucket_dates)}')
 
-    # DEADBEEF - This is a hack since the "hours" in the file name is not actually hours
-    bucket_date_list = [
-        m.group('date').split('_') for f_name in bucket_file_list
-        for m in [re.search(TIF_DT_RE, f_name)]]
-    bucket_dates = {
-        (datetime.datetime.strptime(date_str, '%Y%j') +
-         datetime.timedelta(hours=int(hour) * 3)).strftime(ISO_DT_FMT)
-        for date_str, hour in bucket_date_list}
-    # bucket_dates = {
-    #     datetime.datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
-    #     for f_name in bucket_file_list
-    #     for m in [re.search(TIF_DT_RE, f_name)]}
-
-    # Switch date list to be dates that are missing
+    # Keep dates that have a bucket file
     test_dt_list = [
-        dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ISO_DT_FMT) in bucket_dates]
+        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates
+    ]
     if not test_dt_list:
         logging.info('No dates to process after filtering bucket files')
         return []
     logging.debug('\nDates (after filtering bucket files): {}'.format(
-        ', '.join(map(lambda x: x.strftime('%Y-%m-%dT%H00'), test_dt_list))))
+        ', '.join(map(lambda x: x.strftime('%Y-%m-%dT%H00'), test_dt_list))
+    ))
 
     # Limit the number of dates returned to the number of open queue spots
     if limit:
@@ -495,10 +509,12 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
 
     task_list = sorted(
         [task for task in task_list if task['state'] in states],
-        key=lambda t: (t['state'], t['description'], t['id']))
+        key=lambda t: (t['state'], t['description'], t['id'])
+    )
     # task_list = sorted([
     #     [t['state'], t['description'], t['id']] for t in task_list
-    #     if t['state'] in states])
+    #     if t['state'] in states]
+    # )
 
     # Convert the task list to a dictionary with the task name as the key
     return {task['description']: task for task in task_list}
@@ -582,11 +598,13 @@ if __name__ == '__main__':
         ingest_dt_list = ingest_dates(
             start_dt=args.start, end_dt=args.end, variable=variable,
             hours=list(map(int, args.hours.split(','))),
-            limit=args.limit, overwrite_flag=args.overwrite)
+            limit=args.limit, overwrite_flag=args.overwrite,
+        )
 
         for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
             # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
-            response = ingest(tgt_dt=ingest_dt, variable=variable,
-                              overwrite_flag=args.overwrite)
+            response = ingest(
+                tgt_dt=ingest_dt, variable=variable, overwrite_flag=args.overwrite,
+            )
             logging.info(f'  {response}')
             time.sleep(args.delay)

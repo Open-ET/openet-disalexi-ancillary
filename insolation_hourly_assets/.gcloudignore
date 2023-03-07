@@ -1,3 +1,4 @@
 .gcloudignore
 
 ingest_from_archive.py
+*.sh

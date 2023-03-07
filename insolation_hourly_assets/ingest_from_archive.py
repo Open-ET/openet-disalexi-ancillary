@@ -86,8 +86,10 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
                    f'is False, skipping\n'
 
     properties = {
+        'date': tgt_dt.strftime('%Y-%m-%d'),
         'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
-        # 'doy': int(tgt_dt.strftime('%j')),
+        'doy': int(tgt_dt.strftime('%j')),
+        'hour': int(tgt_dt.strftime('%H')),
         'insolation_version': DATA_VERSION,
         'source': bucket_path,
         'units': 'W m-2',
@@ -458,7 +460,7 @@ def arg_parse():
         '--end', metavar='DATE', type=arg_valid_date,
         # default=(datetime.datetime(today.year, today.month, today.day) -
         #          relativedelta(months=END_MONTH_OFFSET)).strftime('%Y-%m-%d'),
-        help='End date (exclusive)')
+        help='End date (inclusive)')
     parser.add_argument(
         '--hours', default=",".join(map(str, HOURS)),
         help=f'Hour timesteps')

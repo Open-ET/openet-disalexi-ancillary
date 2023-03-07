@@ -14,7 +14,7 @@ dst_folder = 'disalexi'
 
 def main(start_year, end_year, overwrite_flag=False):
     """"""
-    for year in range(start_year, end_year):
+    for year in range(start_year, end_year+1):
         print(f'\nYear: {year}')
 
         for folder, prefix in [

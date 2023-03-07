@@ -1,5 +1,6 @@
 import argparse
 from collections import defaultdict
+from datetime import datetime
 import logging
 import pprint
 import time
@@ -46,26 +47,30 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
         for year in years:
             logging.debug(f'  {year}')
 
-            # for hour in [0] + list(range(13, 24)):
-            # for hour in hours:
-            #     .filter(ee.Filter.calendarRange(hour, hour, 'hour'))\
-            insol_coll = ee.ImageCollection(insol_hourly_coll_id)\
-                .filterDate(f'{year}-01-01', f'{year+1}-01-01')\
-                .select([insol_hourly_band_name], ['b0'])
-            output = nodata_dates(insol_coll, conus_flag)
-
             hourly_dates = defaultdict(list)
-            for item in output:
-                hourly_dates[item.split('_')[0]].append(item.split('_')[1])
-            for date, hours in sorted(hourly_dates.items()):
-                hours_str = ", ".join([str(int(h)) for h in sorted(hours)])
-                logging.info(f'{date}  {hours_str}')
+            for hour in hours:
+                logging.debug(f'Hour: {hour:>2d}')
+
+                insol_coll = ee.ImageCollection(insol_hourly_coll_id)\
+                    .filterDate(f'{year}-01-01', f'{year+1}-01-01')\
+                    .filter(ee.Filter.calendarRange(hour, hour, 'hour'))\
+                    .select([insol_hourly_band_name], ['b0'])
+                output = nodata_dates(insol_coll, conus_flag)
+
+                for item in output:
+                    logging.debug(f'  {item}')
+                    hourly_dates[item.split('_')[0]].append(item.split('_')[1])
+
+            # Call the second variable times to avoid conflict with "hours" input
+            for date_str, times in sorted(hourly_dates.items()):
+                doy_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%j')
+                hours_str = ", ".join([str(int(h)) for h in sorted(times)])
+                logging.info(f'{date_str} ({doy_str})  {hours_str}')
 
 
     # Daily Insolation
     if insol_daily_flag:
         logging.info('\nDaily Insolation')
-        # daily_dates = []
         for year in years:
             logging.debug(f'{year}')
             insol_coll = ee.ImageCollection(insol_daily_coll_id)\
@@ -95,9 +100,11 @@ def main(start_dt, end_dt, insol_hourly_flag=False, insol_daily_flag=False,
                 meteo_var_dates = defaultdict(list)
                 for item in output:
                     meteo_var_dates[item.split('_')[0]].append(item.split('_')[1])
-                for date, hours in sorted(meteo_var_dates.items()):
+
+                for date_str, hours in sorted(meteo_var_dates.items()):
+                    doy_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%j')
                     hours_str = ", ".join([str(int(h)) for h in sorted(hours)])
-                    logging.info(f'{date}  {hours_str}')
+                    logging.info(f'{date_str} ({doy_str})  {hours_str}')
 
 
 def nodata_dates(coll, conus_flag=False):
@@ -106,25 +113,34 @@ def nodata_dates(coll, conus_flag=False):
     else:
         geom = ee.Geometry.BBox(-125, 25, 145, 50)
 
-    def compute_sum(img):
+    # Trying to catch the image being all nodata or all zeros
+    def compute_stats(img):
         date = ee.Date(img.get('system:time_start'))
-        sum = img.reduceRegion(
-            reducer=ee.Reducer.sum(),
-            geometry=geom,
-            crs='EPSG:4326',
-            crsTransform=[0.25, 0, -180,0, -0.25, 90],
-            bestEffort=False,
-        )
+        output = img\
+            .addBands([img.unmask(-9999).rename('nodata')])\
+            .reduceRegion(
+                reducer=ee.Reducer.sum().combine(ee.Reducer.mean(), '', True),
+                geometry=geom,
+                crs='EPSG:4326',
+                crsTransform=[0.25, 0, -180,0, -0.25, 90],
+                bestEffort=False,
+            )
         return ee.Feature(
-            None, {'sum': sum.get('b0'), 'date': date.format('yyyy-MM-dd_HH')}
-            # None, {'sum': sum.get('b0'), 'date': date.format('yyyyDDD_HH')}
+            None,
+            {
+                'nodata_mean': output.get('b0_mean'),
+                'image_sum': output.get('b0_sum'),
+                'date': date.format('yyyy-MM-dd_HH')
+                # 'date': date.format('yyyyDDD_HH')
+            }
         )
 
     for i in range(6):
         date_list = []
         try:
-            date_list = ee.FeatureCollection(coll.map(compute_sum))\
-                .filterMetadata('sum', 'less_than', 0.001)\
+            date_list = ee.FeatureCollection(coll.map(compute_stats))\
+                .filter(ee.Filter.lessThan('nodata_mean', -9998)
+                        .Or(ee.Filter.lessThan('image_sum', 0.001)))\
                 .aggregate_array('date')\
                 .getInfo()
             if date_list:
