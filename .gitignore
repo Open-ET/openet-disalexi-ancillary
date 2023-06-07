@@ -1,6 +1,9 @@
 # PyCharm
 .idea
 
+# MacOS
+.DS_Store
+
 *.json
 *.tif
 *.tif.aux.xml
