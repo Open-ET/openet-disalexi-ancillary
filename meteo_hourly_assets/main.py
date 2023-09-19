@@ -1,5 +1,5 @@
 import argparse
-import datetime
+from datetime import datetime, timedelta
 import logging
 import os
 import re
@@ -11,20 +11,6 @@ from flask import abort, Response
 from google.cloud import storage
 
 import openet.core.utils as utils
-
-if 'FUNCTION_REGION' in os.environ:
-    # Assume code is deployed to a cloud function
-    logging.debug(f'\nInitializing GEE using application default credentials')
-    import google.auth
-    credentials, project_id = google.auth.default(
-        default_scopes=['https://www.googleapis.com/auth/earthengine']
-    )
-    ee.Initialize(credentials)
-
-logging.getLogger('earthengine-api').setLevel(logging.INFO)
-logging.getLogger('googleapiclient').setLevel(logging.ERROR)
-logging.getLogger('requests').setLevel(logging.INFO)
-logging.getLogger('urllib3').setLevel(logging.INFO)
 
 ASSET_ROOT = 'projects/earthengine-legacy/assets/' \
              'projects/disalexi/meteo_data'
@@ -82,6 +68,37 @@ UNITS = {
 VARIABLES = ['airpressure', 'temperature', 'vaporpressure', 'windspeed']
 HOURS = [0, 3, 6, 9, 12, 15, 18, 21]
 
+if 'FUNCTION_REGION' in os.environ:
+    # Logging is not working correctly in cloud functions for Python 3.8+
+    # Following workflow suggested in this issue:
+    # https://issuetracker.google.com/issues/124403972
+    import google.cloud.logging
+    log_client = google.cloud.logging.Client(project='openet')
+    log_client.setup_logging(log_level=20)
+    import logging
+    # CGM - Not sure if these lines are needed or not
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+else:
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    logging.getLogger('earthengine-api').setLevel(logging.INFO)
+    logging.getLogger('googleapiclient').setLevel(logging.ERROR)
+    logging.getLogger('requests').setLevel(logging.INFO)
+    logging.getLogger('urllib3').setLevel(logging.INFO)
+
+if 'FUNCTION_REGION' in os.environ:
+    # Assume code is deployed to a cloud function
+    logging.debug(f'\nInitializing GEE using application default credentials')
+    import google.auth
+    credentials, project_id = google.auth.default(
+        default_scopes=['https://www.googleapis.com/auth/earthengine']
+    )
+    ee.Initialize(credentials)
+# else:
+#     ee.Initialize()
+
 
 def ingest(tgt_dt, variable, overwrite_flag=False):
     """
@@ -104,8 +121,8 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
 
     # DEADBEEF - This is a hack since the "hours" in the file name for the files
     #   in Yun's bucket is an index and is not actually hours
-    tif_dt = (datetime.datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
-              datetime.timedelta(hours=int(tgt_dt.hour) / 3))
+    tif_dt = (datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
+              timedelta(hours=int(tgt_dt.hour) / 3))
     tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX[variable],
                                    date=tif_dt.strftime(TIF_DT_FMT))
     bucket_path = f'gs://{BUCKET_NAME}/{BUCKET_FOLDER[variable]}/{tif_name}'
@@ -131,7 +148,7 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
 
     properties = {
         'date': tgt_dt.strftime('%Y-%m-%d'),
-        'date_ingested': f'{datetime.datetime.today().strftime("%Y-%m-%d")}',
+        'date_ingested': f'{datetime.today().strftime("%Y-%m-%d")}',
         'doy': int(tgt_dt.strftime('%j')),
         'hour': int(tgt_dt.strftime('%H')),
         'meteo_version': DATA_VERSION,
@@ -245,25 +262,24 @@ def cron_scheduler(request):
         end_date = None
 
     if not start_date and not end_date:
-        today = datetime.datetime.today()
-        start_dt = (datetime.datetime(today.year, today.month, today.day) -
+        today = datetime.today()
+        start_dt = (datetime(today.year, today.month, today.day) -
                     relativedelta(days=START_DAY_OFFSET))
-        end_dt = (datetime.datetime(today.year, today.month, today.day) -
+        end_dt = (datetime(today.year, today.month, today.day) -
                   relativedelta(days=END_DAY_OFFSET))
     elif start_date and end_date:
         # Only process custom range if start and end are both set
         # Limit the end date to the last full month date
         try:
-            start_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d')
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
         except ValueError as e:
             response = 'Error parsing start and/or end date\n'
             response += str(e)
             abort(404, description=response)
 
         # Force end date to be last day of previous month
-        # end_dt = min(end_dt,
-        #              datetime.datetime.today() - datetime.timedelta(days=1))
+        # end_dt = min(end_dt, datetime.today() - timedelta(days=1))
 
         # TODO: Force start date to be at least one month before end
         # start_dt = min(
@@ -272,12 +288,12 @@ def cron_scheduler(request):
 
         if start_dt > end_dt:
             abort(404, description='Start date must be before end date')
-        # elif (end_dt - start_dt) > datetime.timedelta(days=200):
+        # elif (end_dt - start_dt) > timedelta(days=200):
         #     abort(404, description='No more than 6 months can be processed in a single request')
-        # if start_dt < datetime.datetime(2001, 1, 1):
+        # if start_dt < datetime(2001, 1, 1):
         #     logging.debug('Start Date: {} - no images before '
         #                   '2001-01-01'.format(start_dt.strftime('%Y-%m-%d')))
-        #     start_dt = datetime.datetime(2001, 1, 1)
+        #     start_dt = datetime(2001, 1, 1)
     else:
         abort(404, description='Both start and end date must be specified')
 
@@ -348,7 +364,7 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     ]
     task_count = len(task_id_list)
     task_dates = {
-        datetime.datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
+        datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
         for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
     }
     # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
@@ -373,8 +389,7 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     for year in {test_dt.year for test_dt in test_dt_list}:
         # logging.debug(f'  {year}')
         asset_date_coll = ee.ImageCollection(asset_coll_id) \
-            .filterDate(start_dt.strftime('%Y-%m-%d'),
-                        end_dt + datetime.timedelta(days=1))\
+            .filterDate(start_dt.strftime('%Y-%m-%d'), end_dt + timedelta(days=1))\
             .filterDate(f'{year}-01-01', f'{year+1}-01-01')
         asset_date_list = []
         for i in range(1, 6):
@@ -388,8 +403,8 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
                 time.sleep(i ** 3)
         if asset_date_list:
             asset_dates.update(asset_date_list)
-    # logging.debug(f'\nAsset dates: {", ".join(sorted(asset_dates))}')
-    # logging.info(f'Asset dates: {len(asset_dates)}')
+    logging.debug(f'\nAsset dates: {", ".join(sorted(asset_dates))}')
+    logging.info(f'Asset dates: {len(asset_dates)}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
@@ -419,8 +434,8 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
             # if blob.name.endswith('.tif')
         ]
         bucket_date_list = [
-            (datetime.datetime.strptime(date_str, '%Y%j') +
-             datetime.timedelta(hours=int(hour) * 3)).strftime(ISO_DT_FMT)
+            (datetime.strptime(date_str, '%Y%j') +
+             timedelta(hours=int(hour) * 3)).strftime(ISO_DT_FMT)
             for date_str, hour in bucket_date_list
         ]
         # CGM - Check the bucket_dates against the test_dt_list before updating?
@@ -428,9 +443,7 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     # logging.info(f'Bucket dates: {len(bucket_dates)}')
 
     # Keep dates that have a bucket file
-    test_dt_list = [
-        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates
-    ]
+    test_dt_list = [dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates]
     if not test_dt_list:
         logging.info('No dates to process after filtering bucket files')
         return []
@@ -470,11 +483,11 @@ def hourly_date_range(start_dt, end_dt, hours, skip_leap_days=False):
     """
     import copy
     curr_dt = copy.copy(start_dt)
-    while curr_dt < (end_dt + datetime.timedelta(days=1)):
+    while curr_dt < (end_dt + timedelta(days=1)):
         if not skip_leap_days or curr_dt.month != 2 or curr_dt.day != 29:
             if curr_dt.hour in hours:
                 yield curr_dt
-        curr_dt += datetime.timedelta(hours=1)
+        curr_dt += timedelta(hours=1)
 
 
 def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
@@ -494,16 +507,15 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
     """
     logging.debug('\nRequesting Task List')
     task_list = None
-    for i in range(retries):
+    for i in range(1, retries):
         try:
             # TODO: getTaskList() is deprecated, switch to listOperations()
             task_list = ee.data.getTaskList()
             # task_list = ee.data.listOperations()
             break
         except Exception as e:
-            logging.warning(
-                f'  Error getting task list, retrying ({i}/{retries})\n  {e}')
-            time.sleep((i+1) ** 2)
+            logging.warning(f'  Error getting task list, retrying ({i}/{retries})\n  {e}')
+            time.sleep(i ** 3)
     if task_list is None:
         raise Exception('\nUnable to retrieve task list, exiting')
 
@@ -522,7 +534,7 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
 
 def arg_parse():
     """"""
-    today = datetime.date.today()
+    today = datetime.today()
 
     parser = argparse.ArgumentParser(
         description='Generate DisALEXI 3 hour meteo assets',
@@ -533,12 +545,12 @@ def arg_parse():
         help=f'DisALEXI Meteorology Variables ({", ".join(VARIABLES)})')
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime.datetime(today.year, today.month, today.day) -
+        default=(datetime(today.year, today.month, today.day) -
                  relativedelta(days=START_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='Start date (format YYYY-MM-DD)')
     parser.add_argument(
         '--end', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime.datetime(today.year, today.month, today.day) -
+        default=(datetime(today.year, today.month, today.day) -
                  relativedelta(days=END_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
     parser.add_argument(
@@ -569,7 +581,7 @@ def arg_parse():
 
 if __name__ == '__main__':
     args = arg_parse()
-    logging.basicConfig(level=args.loglevel, format='%(message)s')
+    # logging.basicConfig(level=args.loglevel, format='%(message)s')
 
     # if args.key and 'FUNCTION_REGION' not in os.environ:
     if args.key:

@@ -1,6 +1,7 @@
 earthengine-api
 flask
 google-api-python-client
+google-cloud-logging
 google-cloud-storage
 openet-core
 python-dateutil
