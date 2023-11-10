@@ -37,6 +37,11 @@ gcloud functions call disalexi-insolation-daily --project openet --data '{"regio
 
 ### Scheduling the job
 
+Update CONUS every day
+```
+gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 7 * * *" --uri "https://us-central1-openet.cloudfunctions.net/disalexi-insolation-daily?region=conus" --description "DisALEXI Daily Insolation CONUS" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 5 --attempt-deadline=540s --min-backoff=30s
+```
+
 Update CONUS every 10 days before interpolation
 ```
 gcloud scheduler jobs update http disalexi-insolation-daily --schedule "0 7 5,15,25 * *" --uri "https://us-central1-openet.cloudfunctions.net/disalexi-insolation-daily?region=conus" --description "DisALEXI Daily Insolation CONUS" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 5 --attempt-deadline=540s --min-backoff=30s
