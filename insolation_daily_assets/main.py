@@ -11,16 +11,14 @@ from flask import abort, Response
 
 import openet.core.utils as utils
 
-# ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
-#                 'projects/disalexi/insol_data/global_v001_daily'
+# ASSET_COLL_ID = 'projects/earthengine-legacy/assets/projects/disalexi/insol_data/global_v001_daily'
 ASSET_COLL_FOLDER = 'projects/earthengine-legacy/assets/projects/disalexi/insol_data'
 ASSET_COLL_NAME = {
     'global': 'global_v001_daily',
     'conus': 'global_v001_daily_conus',
 }
 ASSET_DT_FMT = '%Y%m%d'
-SOURCE_COLL_ID = 'projects/earthengine-legacy/assets/' \
-                 'projects/disalexi/insol_data/global_v001_hourly'
+SOURCE_COLL_ID = 'projects/earthengine-legacy/assets/projects/disalexi/insol_data/global_v001_hourly'
 # Maximum number of new tasks that can be submitted in a function call
 NEW_TASKS = 200
 # Maximum number of queued tasks (intentionally not setting to 3000)
@@ -299,12 +297,27 @@ def cron_scheduler(request):
     else:
         abort(404, description='Both start and end date must be specified')
 
+    if request_json and 'overwrite' in request_json:
+        overwrite_flag = request_json['overwrite']
+    elif request_args and 'overwrite' in request_args:
+        overwrite_flag = request_args['overwrite']
+    else:
+        overwrite_flag = 'false'
+
+    if overwrite_flag.lower() in ['true', 't']:
+        overwrite_flag = True
+    elif overwrite_flag.lower() in ['false', 'f']:
+        overwrite_flag = False
+    else:
+        abort(400, description=f'overwrite="{overwrite_flag}" could not be parsed')
+
     args = {
         'start_dt': start_dt,
         'end_dt': end_dt,
         'region': region,
         'variable': variable,
         'limit': NEW_TASKS,
+        'overwrite_flag': overwrite_flag,
     }
 
     response = ''
@@ -365,14 +378,15 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
     task_count = len(task_id_list)
     task_dates = {
         datetime.strptime(m.group('date'), '%Y%m%d').strftime('%Y-%m-%d')
-        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
+        for task_id in task_id_list
+        for m in [task_id_re.search(task_id)] if m
     }
     # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime('%Y-%m-%d') not in task_dates
+        if overwrite_flag or (dt.strftime('%Y-%m-%d') not in task_dates)
     ]
     if not test_dt_list:
         logging.info('All dates are queued for export')
@@ -390,16 +404,25 @@ def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False
         asset_coll_id = f'{ASSET_COLL_FOLDER}/{ASSET_COLL_NAME[region]}'
     except KeyError:
         raise ValueError(f'Unsupported region parameter: {region}')
-    asset_date_coll = ee.ImageCollection(asset_coll_id)\
+    asset_date_coll = (
+        ee.ImageCollection(asset_coll_id)
         .filterDate(start_dt.strftime('%Y-%m-%d'),
                     (end_dt + timedelta(days=1)).strftime('%Y-%m-%d'))
-    asset_dates = set(asset_date_coll.aggregate_array('system:index').getInfo())
+    )
+    for i in range(1, 4):
+        try:
+            asset_dates = set(asset_date_coll.aggregate_array('system:index').getInfo())
+        except Exception as e:
+            logging.info(f'  Exception get asset list - retry {i}')
+            logging.debug(str(e))
+            time.sleep(i ** 3)
     # logging.debug(f'\nAsset dates: {", ".join(sorted(asset_dates))}')
+    # logging.info(f'Asset dates: {len(asset_dates)}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_dates
+        if overwrite_flag or (dt.strftime(ASSET_DT_FMT) not in asset_dates)
     ]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
@@ -562,15 +585,21 @@ if __name__ == '__main__':
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, asset_coll_id)
 
     ingest_dt_list = ingest_dates(
-        start_dt=args.start, end_dt=args.end, region=args.region,
-        variable='insolation', limit=args.limit, overwrite_flag=args.overwrite,
+        start_dt=args.start,
+        end_dt=args.end,
+        region=args.region,
+        variable='insolation',
+        limit=args.limit,
+        overwrite_flag=args.overwrite,
     )
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
         response = ingest(
-            tgt_dt=ingest_dt, region=args.region,
-            variable='insolation', overwrite_flag=args.overwrite,
+            tgt_dt=ingest_dt,
+            region=args.region,
+            variable='insolation',
+            overwrite_flag=args.overwrite,
         )
         logging.info(f'  {response}')
         time.sleep(args.delay)

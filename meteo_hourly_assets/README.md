@@ -8,13 +8,6 @@ Before deploying or calling the cloud functions, the "project" can be set once w
 gcloud config set project openet
 ```
 
-To enable task logging when run locally, the GOOGLE_APPLICATION_CREDENTIALS environment variable will need to be set to a local copy of the project GEE key file.
-
-```
-# Mac/Linux
-export GOOGLE_APPLICATION_CREDENTIALS="/Users/mortonc/Projects/keys/openet-gee.json"
-```
-
 ### Deploying the cloud function
 
 The following are the parameters that were set when deploying the function for the first time.  Subsequent deployments only need the project if not set above.
@@ -43,9 +36,3 @@ Update every Sunday afternoon
 ```
 gcloud scheduler jobs update http disalexi-meteo-hourly --schedule "35 20,22 * * SUN" --uri "https://us-central1-openet.cloudfunctions.net/disalexi-meteo-hourly" --description "DisALEXI 3-Hourly Meteo Update" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
-
-Historical ingest from OpenET bucket archive
-```
-gcloud scheduler jobs update http disalexi-meteo-hourly --schedule "52 7 * * *" --uri "https://us-central1-openet.cloudfunctions.net/disalexi-meteo-hourly?start=2001-01-01&end=2021-12-31"" --description "DisALEXI 3-Hourly Meteo Historical" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
-```
-

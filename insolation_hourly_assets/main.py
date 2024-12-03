@@ -12,8 +12,7 @@ from google.cloud import storage
 
 import openet.core.utils as utils
 
-ASSET_COLL_ID = 'projects/earthengine-legacy/assets/' \
-                'projects/disalexi/insol_data/global_v001_hourly'
+ASSET_COLL_ID = 'projects/earthengine-legacy/assets/projects/disalexi/insol_data/global_v001_hourly'
 ASSET_DT_FMT = '%Y%m%d%H'
 BUCKET_NAME = 'meteo_insol_data'
 BUCKET_FOLDER = 'insoldata_tif_perband'
@@ -243,12 +242,27 @@ def cron_scheduler(request):
     else:
         abort(404, description='Both start and end date must be specified')
 
+    if request_json and 'overwrite' in request_json:
+        overwrite_flag = request_json['overwrite']
+    elif request_args and 'overwrite' in request_args:
+        overwrite_flag = request_args['overwrite']
+    else:
+        overwrite_flag = 'false'
+
+    if overwrite_flag.lower() in ['true', 't']:
+        overwrite_flag = True
+    elif overwrite_flag.lower() in ['false', 'f']:
+        overwrite_flag = False
+    else:
+        abort(400, description=f'overwrite="{overwrite_flag}" could not be parsed')
+
     args = {
         'start_dt': start_dt,
         'end_dt': end_dt,
         'variable': variable,
         'hours': hours,
         'limit': NEW_TASKS,
+        'overwrite_flag': overwrite_flag,
     }
 
     response = ''
@@ -307,7 +321,8 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     task_count = len(task_id_list)
     task_dates = {
         datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
-        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
+        for task_id in task_id_list
+        for m in [task_id_re.search(task_id)] if m
     }
     # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
 
@@ -330,14 +345,15 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     asset_dates = set()
     for year in {test_dt.year for test_dt in test_dt_list}:
         # logging.debug(f'  {year}')
-        asset_date_coll = ee.ImageCollection(ASSET_COLL_ID) \
-            .filterDate(start_dt.strftime('%Y-%m-%d'), end_dt + timedelta(days=1))\
+        asset_date_coll = (
+            ee.ImageCollection(ASSET_COLL_ID)
+            .filterDate(start_dt.strftime('%Y-%m-%d'), (end_dt + timedelta(days=1)).strftime('%Y-%m-%d'))
             .filterDate(f'{year}-01-01', f'{year+1}-01-01')
+        )
         asset_date_list = []
-        for i in range(1, 6):
+        for i in range(1, 4):
             try:
-                asset_date_list = asset_date_coll.aggregate_array('system:index')\
-                    .getInfo()
+                asset_date_list = asset_date_coll.aggregate_array('system:index').getInfo()
                 break
             except Exception as e:
                 logging.info(f'  Exception get asset list - retry {i}')
@@ -428,7 +444,7 @@ def hourly_date_range(start_dt, end_dt, hours=list(range(0, 24)),
         curr_dt += timedelta(hours=1)
 
 
-def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
+def get_ee_tasks(states=['RUNNING', 'READY'], retries=4):
     """Return current active tasks
 
     Parameters
@@ -537,8 +553,11 @@ if __name__ == '__main__':
         ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
     ingest_dt_list = ingest_dates(
-        start_dt=args.start, end_dt=args.end, variable='insolation',
-        hours=list(map(int, args.hours.split(','))), limit=args.limit,
+        start_dt=args.start,
+        end_dt=args.end,
+        variable='insolation',
+        hours=list(map(int, args.hours.split(','))),
+        limit=args.limit,
         overwrite_flag=args.overwrite,
     )
 

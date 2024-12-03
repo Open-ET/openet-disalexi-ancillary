@@ -12,8 +12,7 @@ from google.cloud import storage
 
 import openet.core.utils as utils
 
-ASSET_ROOT = 'projects/earthengine-legacy/assets/' \
-             'projects/disalexi/meteo_data'
+ASSET_ROOT = 'projects/earthengine-legacy/assets/projects/disalexi/meteo_data'
 ASSET_FOLDER = {
     'airpressure': 'airpressure',
     'temperature': 'airtemperature',
@@ -297,6 +296,20 @@ def cron_scheduler(request):
     else:
         abort(404, description='Both start and end date must be specified')
 
+    if request_json and 'overwrite' in request_json:
+        overwrite_flag = request_json['overwrite']
+    elif request_args and 'overwrite' in request_args:
+        overwrite_flag = request_args['overwrite']
+    else:
+        overwrite_flag = 'false'
+
+    if overwrite_flag.lower() in ['true', 't']:
+        overwrite_flag = True
+    elif overwrite_flag.lower() in ['false', 'f']:
+        overwrite_flag = False
+    else:
+        abort(400, description=f'overwrite="{overwrite_flag}" could not be parsed')
+
     response = ''
     count = 0
     for variable in variables:
@@ -307,6 +320,7 @@ def cron_scheduler(request):
             'variable': variable,
             'hours': hours,
             'limit': NEW_TASKS,
+            'overwrite_flag': overwrite_flag,
         }
         for tgt_dt in ingest_dates(**args):
             response += ingest(tgt_dt, variable, overwrite_flag=True)
@@ -365,9 +379,10 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     task_count = len(task_id_list)
     task_dates = {
         datetime.strptime(m.group('date'), '%Y%m%d%H').strftime(ISO_DT_FMT)
-        for task_id in task_id_list for m in [task_id_re.search(task_id)] if m
+        for task_id in task_id_list
+        for m in [task_id_re.search(task_id)] if m
     }
-    # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
+    # logging.debug(f'Task dates: {", ".join(sorted(task_dates))}')
 
     # Switch date list to be dates that are missing
     test_dt_list = [
@@ -388,14 +403,16 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     asset_dates = set()
     for year in {test_dt.year for test_dt in test_dt_list}:
         # logging.debug(f'  {year}')
-        asset_date_coll = ee.ImageCollection(asset_coll_id) \
-            .filterDate(start_dt.strftime('%Y-%m-%d'), end_dt + timedelta(days=1))\
+        asset_date_coll = (
+            ee.ImageCollection(asset_coll_id)
+            .filterDate(start_dt.strftime('%Y-%m-%d'),
+                        (end_dt + timedelta(days=1)).strftime('%Y-%m-%d'))
             .filterDate(f'{year}-01-01', f'{year+1}-01-01')
+        )
         asset_date_list = []
-        for i in range(1, 6):
+        for i in range(1, 4):
             try:
-                asset_date_list = asset_date_coll.aggregate_array('system:index')\
-                    .getInfo()
+                asset_date_list = asset_date_coll.aggregate_array('system:index').getInfo()
                 break
             except Exception as e:
                 logging.info(f'  Exception get asset list - retry {i}')
@@ -409,7 +426,7 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     # Switch date list to be dates that are missing
     test_dt_list = [
         dt for dt in test_dt_list
-        if overwrite_flag or dt.strftime(ASSET_DT_FMT) not in asset_dates
+        if overwrite_flag or (dt.strftime(ASSET_DT_FMT) not in asset_dates)
     ]
     if not test_dt_list:
         logging.info('No dates to process after filtering existing assets')
@@ -440,7 +457,7 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
         ]
         # CGM - Check the bucket_dates against the test_dt_list before updating?
         bucket_dates.update(bucket_date_list)
-    # logging.info(f'Bucket dates: {len(bucket_dates)}')
+    logging.info(f'Bucket dates: {len(bucket_dates)}')
 
     # Keep dates that have a bucket file
     test_dt_list = [dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates]
@@ -490,7 +507,7 @@ def hourly_date_range(start_dt, end_dt, hours, skip_leap_days=False):
         curr_dt += timedelta(hours=1)
 
 
-def get_ee_tasks(states=['RUNNING', 'READY'], retries=6):
+def get_ee_tasks(states=['RUNNING', 'READY'], retries=4):
     """Return current active tasks
 
     Parameters
@@ -608,9 +625,12 @@ if __name__ == '__main__':
     for variable in args.variables:
         logging.info(f'\nVariable: {variable}')
         ingest_dt_list = ingest_dates(
-            start_dt=args.start, end_dt=args.end, variable=variable,
+            start_dt=args.start,
+            end_dt=args.end,
+            variable=variable,
             hours=list(map(int, args.hours.split(','))),
-            limit=args.limit, overwrite_flag=args.overwrite,
+            limit=args.limit,
+            overwrite_flag=args.overwrite,
         )
 
         for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
