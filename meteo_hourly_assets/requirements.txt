@@ -1,7 +1,6 @@
-earthengine-api
-flask
-google-api-python-client
-google-cloud-logging
-google-cloud-storage
-openet-core
+earthengine-api==0.1.392
+flask==2.3.3
+google-cloud-logging==3.9.0
+google-cloud-storage==2.17.0
+openet-core==0.6.0
 python-dateutil
