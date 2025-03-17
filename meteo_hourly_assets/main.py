@@ -122,8 +122,7 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
     #   in Yun's bucket is an index and is not actually hours
     tif_dt = (datetime(tgt_dt.year, tgt_dt.month, tgt_dt.day) +
               timedelta(hours=int(tgt_dt.hour) / 3))
-    tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX[variable],
-                                   date=tif_dt.strftime(TIF_DT_FMT))
+    tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX[variable], date=tif_dt.strftime(TIF_DT_FMT))
     bucket_path = f'gs://{BUCKET_NAME}/{BUCKET_FOLDER[variable]}/{tif_name}'
 
     asset_id = f'{ASSET_ROOT}/{ASSET_FOLDER[variable]}/{ASSET_COLL_NAME}/' \
@@ -139,7 +138,7 @@ def ingest(tgt_dt, variable, overwrite_flag=False):
             try:
                 ee.data.deleteAsset(asset_id)
             except Exception as e:
-                return f'{export_name} - An error occured while trying to '\
+                return f'{export_name} - An error occurred while trying to '\
                        f'delete the existing asset, skipping\n{e}\n'
         else:
             return f'{export_name} - The asset already exists and overwrite '\
@@ -227,9 +226,9 @@ def cron_scheduler(request):
     request_json = request.get_json(silent=True)
     request_args = request.args
 
-    if request_json and 'variables' in request_json:
+    if request_json and ('variables' in request_json):
         variables = request_json['variables'].split(',')
-    elif request_args and 'variable' in request_args:
+    elif request_args and ('variable' in request_args):
         variables = request_args['variables'].split(',')
     else:
         variables = VARIABLES[:]
@@ -246,16 +245,16 @@ def cron_scheduler(request):
     #     hours = '0-7'
 
     # Default start and end date to None if not set
-    if request_json and 'start' in request_json:
+    if request_json and ('start' in request_json):
         start_date = request_json['start']
-    elif request_args and 'start' in request_args:
+    elif request_args and ('start' in request_args):
         start_date = request_args['start']
     else:
         start_date = None
 
-    if request_json and 'end' in request_json:
+    if request_json and ('end' in request_json):
         end_date = request_json['end']
-    elif request_args and 'end' in request_args:
+    elif request_args and ('end' in request_args):
         end_date = request_args['end']
     else:
         end_date = None

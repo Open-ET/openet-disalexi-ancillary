@@ -102,7 +102,7 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
             try:
                 ee.data.deleteAsset(asset_id)
             except Exception as e:
-                return f'{export_name} - An error occured while trying to '\
+                return f'{export_name} - An error occurred while trying to '\
                        f'delete the existing asset, skipping\n{e}\n'
         else:
             return f'{export_name} - The asset already exists and overwrite '\
@@ -175,33 +175,33 @@ def cron_scheduler(request):
     request_args = request.args
 
     variable = 'insolation'
-    # if request_json and 'variable' in request_json:
+    # if request_json and ('variable' in request_json):
     #     variable = request_json['variable']
-    # elif request_args and 'variable' in request_args:
+    # elif request_args and ('variable' in request_args):
     #     variable = request_args['variable']
     # else:
     #     abort(404, description='variable must be specified')
 
     # TODO: Add support for hours parameter
     hours = list(range(0, 24))
-    # if request_json and 'hours' in request_json:
+    # if request_json and ('hours' in request_json):
     #     hours = request_json['hours']
-    # elif request_args and 'hours' in request_args:
+    # elif request_args and ('hours' in request_args):
     #     hours = request_args['hours']
     # else:
     #     hours = '0-23'
 
     # Default start and end date to None if not set
-    if request_json and 'start' in request_json:
+    if request_json and ('start' in request_json):
         start_date = request_json['start']
-    elif request_args and 'start' in request_args:
+    elif request_args and ('start' in request_args):
         start_date = request_args['start']
     else:
         start_date = None
 
-    if request_json and 'end' in request_json:
+    if request_json and ('end' in request_json):
         end_date = request_json['end']
-    elif request_args and 'end' in request_args:
+    elif request_args and ('end' in request_args):
         end_date = request_args['end']
     else:
         end_date = None
@@ -242,9 +242,9 @@ def cron_scheduler(request):
     else:
         abort(404, description='Both start and end date must be specified')
 
-    if request_json and 'overwrite' in request_json:
+    if request_json and ('overwrite' in request_json):
         overwrite_flag = request_json['overwrite']
-    elif request_args and 'overwrite' in request_args:
+    elif request_args and ('overwrite' in request_args):
         overwrite_flag = request_args['overwrite']
     else:
         overwrite_flag = 'false'

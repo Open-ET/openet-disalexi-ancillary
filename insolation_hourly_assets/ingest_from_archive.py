@@ -79,7 +79,7 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
             try:
                 ee.data.deleteAsset(asset_id)
             except Exception as e:
-                return f'{export_name} - An error occured while trying to '\
+                return f'{export_name} - An error occurred while trying to '\
                        f'delete the existing asset, skipping\n{e}\n'
         else:
             return f'{export_name} - The asset already exists and overwrite '\
