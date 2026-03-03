@@ -1,4 +1,7 @@
 .gcloudignore
 
-ingest_from_archive.py
+# Download folder
+insolation
+
+tools/*.py
 *.sh

@@ -1,26 +1,30 @@
 import argparse
 from datetime import datetime, timedelta
+import json
 import logging
 import os
+import pprint
 import re
+import shutil
 import time
 
 from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
 from google.cloud import storage
+import numpy as np
+import rasterio
+import requests
 
 import openet.core.utils as utils
 
+SOURCE_URL = 'https://nssrgeo.ndc.nasa.gov/SPoRT/land_surface_products/alexi_et/meteo'
 ASSET_COLL_ID = 'projects/earthengine-legacy/assets/projects/disalexi/insol_data/global_v001_hourly'
 ASSET_DT_FMT = '%Y%m%d%H'
-BUCKET_NAME = 'meteo_insol_data'
-BUCKET_FOLDER = 'insoldata_tif_perband'
-# BUCKET_NAME = 'openet'
-# BUCKET_FOLDER = 'disalexi/insoldata_tif'
-ARCHIVE_BUCKET_NAME = 'openet'
-ARCHIVE_BUCKET_FOLDER = 'disalexi/insoldata_tif'
-DATA_VERSION = 1
+BUCKET_NAME = 'openet'
+BUCKET_FOLDER = 'disalexi/insoldata_tif'
+DATA_VERSION = 2
+HOURS = list(range(0, 24))
 ISO_DT_FMT = '%Y-%m-%dT%H00'
 # Maximum number of new tasks that can be submitted in a function call
 NEW_TASKS = 300
@@ -32,9 +36,12 @@ END_DAY_OFFSET = 3
 STORAGE_CLIENT = storage.Client()
 TIF_PREFIX = 'insol_series_'
 TIF_NAME_FMT = '{prefix}{date}.tif'
-TIF_DT_FMT = '%Y%j_%H'
-TIF_DT_RE = '(?P<date>\d{7}_\d{2}).tif'
-HOURS = list(range(0, 24))
+TIF_DT_FMT = '%Y%m%d_%H'
+TIF_DT_RE = '(?P<date>\d{8}_\d{2})'
+# TODO: Check these units
+UNITS = 'W m-2'
+VARIABLES = ['insolation']
+
 
 if 'FUNCTION_REGION' in os.environ:
     # Logging is not working correctly in cloud functions for Python 3.8+
@@ -64,8 +71,6 @@ if 'FUNCTION_REGION' in os.environ:
         default_scopes=['https://www.googleapis.com/auth/earthengine']
     )
     ee.Initialize(credentials)
-# else:
-#     ee.Initialize()
 
 
 def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
@@ -82,17 +87,19 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
     str : response string
 
     """
-    # tgt_date = tgt_dt.strftime('%Y%m%d%H')
-
     logging.info(f'DisALEXI hourly {variable} - {tgt_dt.strftime("%Y-%m-%dT%H00")}')
     # response = f'DisALEXI hourly {variable} - {tgt_dt.strftime("%Y-%m")}'
 
     tif_name = TIF_NAME_FMT.format(prefix=TIF_PREFIX, date=tgt_dt.strftime(TIF_DT_FMT))
+    local_ws = os.path.join(os.getcwd(), variable, tgt_dt.strftime(f'%Y%m%d%H'))
+    local_path = os.path.join(local_ws, tif_name)
+    source_path = f'{SOURCE_URL}/{tif_name}'
     bucket_path = f'gs://{BUCKET_NAME}/{BUCKET_FOLDER}/{tif_name}'
-
     asset_id = f'{ASSET_COLL_ID}/{tgt_dt.strftime(ASSET_DT_FMT)}'
     export_name = f'disalexi_hourly_{variable}_{tgt_dt.strftime("%Y%m%d%H")}'
 
+    logging.debug(f'  {source_path}')
+    logging.debug(f'  {local_path}')
     logging.debug(f'  {bucket_path}')
     logging.debug(f'  {asset_id}')
     logging.debug(f'  {export_name}')
@@ -108,14 +115,48 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
             return f'{export_name} - The asset already exists and overwrite '\
                    f'is False, skipping\n'
 
+    # Always overwrite temporary files if the asset doesn't exist
+    if os.path.isdir(local_ws):
+        shutil.rmtree(local_ws)
+    if not os.path.isdir(local_ws):
+        os.makedirs(local_ws)
+
+    # Download the image from the server
+    if not os.path.isfile(local_path) or overwrite_flag:
+        logging.debug('  Downloading source image')
+        url_download(source_path, local_path)
+    if not os.path.isfile(local_path):
+        return f'{export_name} - Image was not downloaded, skipping\n'
+
+    ####
+
+    # # TODO: The transform shift should not be needed after Chris updates the source images
+    # # Set the geotransform to shift the arrays by half a cell to the west and north
+    # with rasterio.open(local_path, "r") as src:
+    #     data = src.read()
+    #     profile = src.profile.copy()
+    # profile.update(transform=rasterio.transform.from_origin(-180, 90, 0.25, 0.25))
+    # with rasterio.open(local_path, "w", **profile) as dst:
+    #     dst.write(data)
+
+    ####
+
+    # Copy the file to the bucket for ingest and archiving
+    bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
+    blob = bucket.blob(f'{BUCKET_FOLDER}/{tif_name}')
+    if blob and (not blob.exists() or overwrite_flag):
+        logging.debug('  Uploading to bucket')
+        blob.upload_from_filename(local_path)
+
     properties = {
         'date': tgt_dt.strftime('%Y-%m-%d'),
         'date_ingested': f'{datetime.today().strftime("%Y-%m-%d")}',
         'doy': int(tgt_dt.strftime('%j')),
         'hour': int(tgt_dt.strftime('%H')),
         'insolation_version': DATA_VERSION,
-        'source': bucket_path,
-        'units': 'W m-2',
+        'bucket_url': bucket_path,
+        'source_url': source_path,
+        'units': UNITS,
     }
     params = {
         'name': asset_id,
@@ -127,9 +168,9 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
         # 'pyramiding_policy': 'MEAN',
     }
 
-    logging.debug('  Starting ingesting task')
+    logging.debug('  Starting ingest task')
     task = None
-    for i in range(1, 6):
+    for i in range(1, 4):
         try:
             task_id = ee.data.newTaskId()[0]
             task = ee.data.startIngestion(task_id, params, allow_overwrite=True)
@@ -142,20 +183,15 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
         return f'{export_name} - could not start ingest task'
         # abort(500, description=f'{export_name} - could not start ingest task')
 
-    src_bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    src_blob = src_bucket.blob(f'{BUCKET_FOLDER}/{tif_name}')
-    if src_blob and src_blob.exists():
-        logging.debug('  Archiving file')
-        dst_bucket = STORAGE_CLIENT.bucket(ARCHIVE_BUCKET_NAME)
-        blob_copy = src_bucket.copy_blob(
-            src_blob, dst_bucket, f'{ARCHIVE_BUCKET_FOLDER}/{tif_name}'
-        )
+    # TODO: Uncomment before deploying
+    # if os.path.isdir(local_ws):
+    #     shutil.rmtree(local_ws)
 
     logging.info(f'{export_name} - {task["id"]}')
     return f'{export_name} - {task["id"]}\n'
 
 
-def cron_scheduler(request):
+def update(request):
     """Responds to any HTTP request.
 
     Parameters
@@ -183,13 +219,13 @@ def cron_scheduler(request):
     #     abort(404, description='variable must be specified')
 
     # TODO: Add support for hours parameter
-    hours = list(range(0, 24))
+    hours = HOURS[:]
     # if request_json and ('hours' in request_json):
     #     hours = request_json['hours']
     # elif request_args and ('hours' in request_args):
     #     hours = request_args['hours']
     # else:
-    #     hours = '0-23'
+    #     hours = HOURS[:]
 
     # Default start and end date to None if not set
     if request_json and ('start' in request_json):
@@ -227,9 +263,7 @@ def cron_scheduler(request):
         # end_dt = min(end_dt, datetime.today() - timedelta(days=1))
 
         # TODO: Force start date to be at least one month before end
-        # start_dt = min(
-        #     start_dt,
-        #     end_dt - relativedelta(months=1) + relativedelta(days=1))
+        # start_dt = min(start_dt, end_dt - relativedelta(months=1) + relativedelta(days=1))
 
         if start_dt > end_dt:
             abort(404, description='Start date must be before end date')
@@ -336,7 +370,8 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
         return []
     # else:
     #     logging.info('\nMissing asset dates: {}'.format(', '.join(
-    #         map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))))
+    #         map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
+    #     ))
     # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if the assets already exist
@@ -373,36 +408,55 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
         logging.info('No dates to process after filtering existing assets')
         return []
     logging.debug('\nDates (after filtering existing assets): {}'.format(
-        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
-    # logging.info(f'Test dates: {len(test_dt_list)}')
+        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
+    ))
 
-    # Check bucket by year and only for missing years
-    # This should be faster later on once more of the assets are ingested
-    #   since it will skip most years
-    logging.debug('\nChecking bucket files (by year)')
-    bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    bucket_dates = set()
-    for year in {test_dt.year for test_dt in test_dt_list}:
-        # logging.debug(f'  {year}')
-        bucket_date_list = [
-            datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
-            for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER}/{TIF_PREFIX}{year}')
-            for m in [re.search(TIF_DT_RE, blob.name)]
-            # if blob.name.endswith('.tif')
-        ]
-        # CGM - Check the bucket_dates against the test_dt_list before updating?
-        bucket_dates.update(bucket_date_list)
+    # # Check bucket by year and only for missing years
+    # # This should be faster later on once more of the assets are ingested
+    # #   since it will skip most years
+    # logging.debug('\nChecking bucket files (by year)')
+    # bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
+    # bucket_dates = set()
+    # for year in {test_dt.year for test_dt in test_dt_list}:
+    #     logging.debug(f'  {year}')
+    #     bucket_date_list = [
+    #         datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
+    #         for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER}/{TIF_PREFIX}{year}')
+    #         for m in [re.search(TIF_DT_RE, blob.name)] if m
+    #         # if blob.name.endswith('.tif')
+    #     ]
+    #     # CGM - Check the bucket_dates against the test_dt_list before updating?
+    #     bucket_dates.update(bucket_date_list)
     # logging.info(f'Bucket dates: {len(bucket_dates)}')
+    #
+    # # Keep dates that have a bucket file
+    # test_dt_list = [dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates]
+    # if not test_dt_list:
+    #     logging.info('No dates to process after filtering bucket files')
+    #     return []
+    # logging.debug('\nDates (after filtering bucket files): {}'.format(
+    #     ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
+    # ))
 
-    # Keep dates that have a bucket file
-    test_dt_list = [
-        dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates
-    ]
+    # Finally, check the server for images
+    # TODO: Add code to check if the images have a newer last modified date
+    logging.debug('\nChecking server files')
+    logging.debug(f'{SOURCE_URL}')
+    server_dates = {
+        datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
+        for item in get_json_file_listing(SOURCE_URL, variable=TIF_PREFIX)
+        for m in [re.search(TIF_DT_RE, item['filename'])] if m
+        # if item['filename'].endswith('.tif')
+    }
+
+    # Keep dates that have a server file
+    test_dt_list = [dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in server_dates]
     if not test_dt_list:
-        logging.info('No dates to process after filtering bucket files')
+        logging.info('No dates to process after filtering server files')
         return []
-    logging.debug('\nDates (after filtering bucket files): {}'.format(
-        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))))
+    logging.debug('\nDates (after filtering server files): {}'.format(
+        ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
+    ))
 
     # Limit the number of dates returned to the number of open queue spots
     if limit:
@@ -416,8 +470,7 @@ def ingest_dates(start_dt, end_dt, variable, hours, limit, overwrite_flag=False)
     return test_dt_list
 
 
-def hourly_date_range(start_dt, end_dt, hours=list(range(0, 24)),
-                      skip_leap_days=False):
+def hourly_date_range(start_dt, end_dt, hours=HOURS, skip_leap_days=False):
     """Generate hourly dates within a range (inclusive)
 
     Parameters
@@ -486,12 +539,113 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=4):
     return {task['description']: task for task in task_list}
 
 
+def get_json_file_listing(url, variable=None):
+    # https://nssrgeo.ndc.nasa.gov/SPoRT/land_surface_products/alexi_et/meteo/?format=json
+
+    response = requests.get(url + '/?format=json')
+    response.raise_for_status()
+
+    output = json.loads(response.text)['directory_listing']
+    if variable:
+        output = [item for item in output if variable in item['filename']]
+
+    return output
+
+
+# def get_file_listing(url, variable=None):
+#     """Downloads the file listing from the server
+#
+#     Returns:
+#         list of dicts with keys 'name', 'date', and 'size'
+#     """
+#     response = requests.get(url)
+#     response.raise_for_status()
+#
+#     soup = BeautifulSoup(response.text, "html.parser")
+#     table = soup.find("table")
+#     if not table:
+#         raise ValueError("Could not find a table in the page response.")
+#
+#     files = []
+#     for row in table.find_all("tr"):
+#         cells = row.find_all("td")
+#         if len(cells) < 3:
+#             continue
+#
+#         name = cells[0].get_text(strip=True)
+#         date_str = cells[1].get_text(strip=True)
+#         size = cells[2].get_text(strip=True)
+#
+#         # Skip parent directory entry and header rows
+#         if not name or name in ("Name", "../", "..") or not date:
+#             continue
+#
+#         if variable and (variable not in name):
+#             continue
+#
+#         # Parse the date (e.g. "2026-Feb-19 21:01:35")
+#         try:
+#             date = datetime.strptime(date_str, "%Y-%b-%d %H:%M:%S")
+#         except ValueError:
+#             date = date_str  # keep as raw string if parsing fails
+#
+#         files.append({"name": name, "date": date, "size": size})
+#
+#     return files
+
+
+def url_download(download_url, output_path, verify=True):
+    """Download file from a URL using requests module
+
+    Parameters
+    ----------
+    download_url : str
+    output_path : str
+    verify : bool, optional
+
+    Returns
+    -------
+    None
+
+    """
+    for i in range(1, 6):
+        try:
+            response = requests.get(download_url, stream=True, verify=verify)
+        except Exception as e:
+            logging.info(f'  Exception: {e}')
+            return False
+
+        logging.debug(f'  HTTP Status: {response.status_code}')
+        if response.status_code == 200:
+            pass
+        elif response.status_code == 404:
+            logging.debug('  Skipping')
+            return False
+        else:
+            logging.info(f'  HTTPError: {response.status_code}')
+            logging.info(f'  Retry attempt: {i}')
+            time.sleep(i ** 2)
+            continue
+
+        logging.debug('  Beginning download')
+        try:
+            with (open(output_path, 'wb')) as output_f:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:  # filter out keep-alive new chunks
+                        output_f.write(chunk)
+            logging.debug('  Download complete')
+            return True
+        except Exception as e:
+            logging.info(f'  Exception: {e}')
+            return False
+
+
 def arg_parse():
     """"""
     today = datetime.today()
 
     parser = argparse.ArgumentParser(
-        description='Generate DisALEXI hourly insolation assets',
+        description='Ingest DisALEXI hourly insolation assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
@@ -519,6 +673,9 @@ def arg_parse():
         '--overwrite', default=False, action='store_true',
         help='Force overwrite of existing files')
     parser.add_argument(
+        '--project', default=None,
+        help='Google cloud project ID to use for GEE authentication')
+    parser.add_argument(
         '--reverse', default=False, action='store_true',
         help='Process dates in reverse order')
     parser.add_argument(
@@ -540,17 +697,24 @@ if __name__ == '__main__':
             ee.Initialize(ee.ServiceAccountCredentials('_', key_file=args.key))
         except ee.ee_exception.EEException:
             raise Exception('Unable to initialize GEE using user key file')
+    elif args.project:
+        logging.info(f'\nInitializing Earth Engine using project credentials'
+                     f'\n  Project ID: {args.project}')
+        ee.Initialize(project=args.project)
+        # ee.Initialize(
+        #     project=args.project, opt_url='https://earthengine-highvolume.googleapis.com'
+        # )
     else:
         logging.info('\nInitializing Earth Engine using user credentials')
         ee.Initialize()
 
-    # Build the image collection if it doesn't exist
-    logging.debug(f'Image Collection: {ASSET_COLL_ID}')
-    if not ee.data.getInfo(ASSET_COLL_ID):
-        logging.info(f'\nImage collection does not exist and will be built'
-                     f'\n  {ASSET_COLL_ID}')
-        input('Press ENTER to continue')
-        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
+    # # Build the image collection if it doesn't exist
+    # logging.debug(f'Image Collection: {ASSET_COLL_ID}')
+    # if not ee.data.getInfo(ASSET_COLL_ID):
+    #     logging.info(f'\nImage collection does not exist and will be built'
+    #                  f'\n  {ASSET_COLL_ID}')
+    #     input('Press ENTER to continue')
+    #     ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
     ingest_dt_list = ingest_dates(
         start_dt=args.start,
@@ -560,6 +724,9 @@ if __name__ == '__main__':
         limit=args.limit,
         overwrite_flag=args.overwrite,
     )
+    if args.loglevel == logging.DEBUG:
+        pprint.pprint(ingest_dt_list)
+        input('ENTER')
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')

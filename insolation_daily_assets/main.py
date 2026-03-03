@@ -204,7 +204,7 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
     return f'{export_name} - {task.id}\n'
 
 
-def cron_scheduler(request):
+def update(request):
     """Responds to any HTTP request.
 
     Parameters
@@ -568,21 +568,28 @@ if __name__ == '__main__':
             ee.Initialize(ee.ServiceAccountCredentials('_', key_file=args.key))
         except ee.ee_exception.EEException:
             raise Exception('Unable to initialize GEE using user key file')
+    elif args.project:
+        logging.info(f'\nInitializing Earth Engine using project credentials'
+                     f'\n  Project ID: {args.project}')
+        ee.Initialize(project=args.project)
+        # ee.Initialize(
+        #     project=args.project, opt_url='https://earthengine-highvolume.googleapis.com'
+        # )
     else:
         logging.info('\nInitializing Earth Engine using user credentials')
         ee.Initialize()
 
-    # Build the image collection if it doesn't exist
-    try:
-        asset_coll_id = f'{ASSET_COLL_FOLDER}/{ASSET_COLL_NAME[args.region]}'
-    except KeyError:
-        raise ValueError(f'Unsupported region parameter: {args.region}')
-    logging.debug(f'Image Collection: {asset_coll_id}')
-    if not ee.data.getInfo(asset_coll_id):
-        logging.info(f'\nImage collection does not exist and will be built'
-                     f'\n  {asset_coll_id}')
-        input('Press ENTER to continue')
-        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, asset_coll_id)
+    # # Build the image collection if it doesn't exist
+    # try:
+    #     asset_coll_id = f'{ASSET_COLL_FOLDER}/{ASSET_COLL_NAME[args.region]}'
+    # except KeyError:
+    #     raise ValueError(f'Unsupported region parameter: {args.region}')
+    # logging.debug(f'Image Collection: {asset_coll_id}')
+    # if not ee.data.getInfo(asset_coll_id):
+    #     logging.info(f'\nImage collection does not exist and will be built'
+    #                  f'\n  {asset_coll_id}')
+    #     input('Press ENTER to continue')
+    #     ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, asset_coll_id)
 
     ingest_dt_list = ingest_dates(
         start_dt=args.start,
@@ -592,6 +599,9 @@ if __name__ == '__main__':
         limit=args.limit,
         overwrite_flag=args.overwrite,
     )
+    if args.loglevel == logging.DEBUG:
+        pprint.pprint(ingest_dt_list)
+        input('ENTER')
 
     for ingest_dt in sorted(ingest_dt_list, reverse=args.reverse):
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')

@@ -122,7 +122,7 @@ def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
     return f'{export_name} - {task["id"]}\n'
 
 
-def cron_scheduler(request):
+def update(request):
     """Responds to any HTTP request.
 
     Parameters

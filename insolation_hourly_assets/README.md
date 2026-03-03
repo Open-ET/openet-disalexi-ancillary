@@ -1,17 +1,9 @@
-### Cloud project
-
-Before deploying or calling the cloud functions, the "project" can be set once with the following call, or passed to each gcloud call.
-
-```
-gcloud config set project openet
-```
+# CFSR Hourly Insolation Asset Ingest
 
 ### Deploying the cloud function
 
-The following are the parameters that were set when deploying the function for the first time.  Subsequent deployments only need the project if not set above.
-
 ```
-gcloud functions deploy disalexi-insolation-hourly --project openet --no-gen2 --runtime python311 --region us-central1 --entry-point cron_scheduler --trigger-http --allow-unauthenticated --memory 512 --timeout 540 --max-instances 1 --service-account="openet-assets-queue@openet.iam.gserviceaccount.com" --set-env-vars FUNCTION_REGION=us-central1
+gcloud functions deploy disalexi-insolation-hourly --project openet --no-gen2 --runtime python311 --region us-central1 --entry-point update --trigger-http --allow-unauthenticated --memory 1024 --timeout 360 --max-instances 1 --service-account="openet-assets-queue@openet.iam.gserviceaccount.com" --set-env-vars FUNCTION_REGION=us-central1
 ```
 
 ### Calling the cloud function
@@ -30,13 +22,7 @@ gcloud functions call disalexi-insolation-hourly --project openet
 
 ### Scheduling the job
 
-Update every Sunday afternoon
+Update every day
 ```
-gcloud scheduler jobs update http disalexi-insolation-hourly --schedule "5 20,22 * * SUN" --uri "https://us-central1-openet.cloudfunctions.net/disalexi-insolation-hourly" --description "DisALEXI Hourly Insolation Update" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
-```
-
-### Archiving the geotiffs in the OpenET bucket
-
-```
-gsutil -m cp gs://meteo_insol_data/insoldata_tif_perband/insol_series_2024*.tif gs://openet/disalexi/insoldata_tif/
+gcloud scheduler jobs udpate http disalexi-insolation-hourly --schedule "5 13 * * *" --uri "https://us-central1-openet.cloudfunctions.net/disalexi-insolation-hourly" --description "CFSR/DisALEXI Hourly Insolation Update" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
