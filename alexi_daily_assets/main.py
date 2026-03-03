@@ -71,7 +71,7 @@ if 'FUNCTION_REGION' in os.environ:
     credentials, project_id = google.auth.default(
         default_scopes=['https://www.googleapis.com/auth/earthengine']
     )
-    ee.Initialize(credentials)
+    ee.Initialize(credentials, project=project_id)
 
 
 def ingest(tgt_dt, status, variable='et', overwrite_flag=False):
@@ -132,13 +132,18 @@ def ingest(tgt_dt, status, variable='et', overwrite_flag=False):
     if not os.path.isfile(local_path):
         return f'{export_name} - Image was not downloaded, skipping\n'
 
-    # Set the nodata parameter and tile the geotiff
-    with rasterio.open(local_path) as src:
-        data = src.read()
-        profile = src.profile.copy()
-    profile.update(tiled=True, blockxsize=256, blockysize=256, nodata=-9999)
-    with rasterio.open(local_path, "w", **profile) as dst:
-        dst.write(data)
+    # # Set the nodata parameter and tile the geotiff
+    # with rasterio.open(local_path) as src:
+    #     data = src.read()
+    #     profile = src.profile.copy()
+    # profile.update(
+    #     # [0.04,0,-125.02,0,-0.04,49.78]
+    #     transform=rasterio.transform.from_origin(-125.02, 49.78, 0.04, 0.04),
+    #     # tiled=True, blockxsize=256, blockysize=256,
+    #     # nodata=-9999
+    # )
+    # with rasterio.open(local_path, "w", **profile) as dst:
+    #     dst.write(data)
 
     # Copy the file to the bucket for ingest and archiving
     bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)

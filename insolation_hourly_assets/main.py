@@ -12,8 +12,8 @@ from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
 from google.cloud import storage
-import numpy as np
-import rasterio
+# import numpy as np
+# import rasterio
 import requests
 
 import openet.core.utils as utils
@@ -70,7 +70,7 @@ if 'FUNCTION_REGION' in os.environ:
     credentials, project_id = google.auth.default(
         default_scopes=['https://www.googleapis.com/auth/earthengine']
     )
-    ee.Initialize(credentials)
+    ee.Initialize(credentials, project=project_id)
 
 
 def ingest(tgt_dt, variable='insolation', overwrite_flag=False):
