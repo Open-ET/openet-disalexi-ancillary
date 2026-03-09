@@ -1,5 +1,6 @@
-earthengine-api==1.7.4
-flask==2.3.3
-google-cloud-logging==3.9.0
+earthengine-api==1.7.15
+flask
+google-auth==2.14.1
+google-cloud-logging
 openet-core==0.6.0
 python-dateutil

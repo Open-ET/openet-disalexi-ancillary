@@ -1,10 +1,4 @@
-### Cloud project
-
-Before deploying or calling the cloud functions, the "project" can be set once with the following call, or passed to each gcloud call.
-
-```
-gcloud config set project openet
-```
+# CFSR Daily Insolation Asset Ingest
 
 ### Deploying the cloud function
 
@@ -31,6 +25,7 @@ gcloud functions call disalexi-insolation-daily --project openet --data '{"regio
 ### Scheduling the job
 
 Update every day
+
 ```
 gcloud scheduler jobs update http disalexi-insolation-daily --schedule "5 15 * * *" --uri "https://us-central1-openet.cloudfunctions.net/disalexi-insolation-daily?region=conus" --description "CFSR/DisALEXI Daily Insolation Update (CONUS only)" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```

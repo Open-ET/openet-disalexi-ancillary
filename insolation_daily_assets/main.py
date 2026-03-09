@@ -54,7 +54,9 @@ if 'FUNCTION_REGION' in os.environ:
     credentials, project_id = google.auth.default(
         default_scopes=['https://www.googleapis.com/auth/earthengine']
     )
-    ee.Initialize(credentials, project=project_id)
+    ee.Initialize(
+        credentials, project=project_id, opt_url='https://earthengine-highvolume.googleapis.com'
+    )
 
 
 def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
@@ -186,7 +188,7 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
     )
 
     # Start the export task
-    for i in range(1, 6):
+    for i in range(1, 4):
         try:
             task.start()
             break
@@ -328,7 +330,7 @@ def update(request):
     return Response(response, mimetype='text/plain')
 
 
-def ingest_dates(start_dt, end_dt, region, variable, limit, overwrite_flag=False):
+def ingest_dates(start_dt, end_dt, region, variable, limit=0, overwrite_flag=False):
     """Identify daily datetimes to ingest
 
     Parameters
@@ -557,7 +559,6 @@ def arg_parse():
 
 if __name__ == '__main__':
     args = arg_parse()
-    # logging.basicConfig(level=args.loglevel, format='%(message)s')
 
     # if args.key and 'FUNCTION_REGION' not in os.environ:
     if args.key:
@@ -570,9 +571,6 @@ if __name__ == '__main__':
         logging.info(f'\nInitializing Earth Engine using project credentials'
                      f'\n  Project ID: {args.project}')
         ee.Initialize(project=args.project)
-        # ee.Initialize(
-        #     project=args.project, opt_url='https://earthengine-highvolume.googleapis.com'
-        # )
     else:
         logging.info('\nInitializing Earth Engine using user credentials')
         ee.Initialize()

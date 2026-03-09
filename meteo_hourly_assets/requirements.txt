@@ -1,9 +1,8 @@
-earthengine-api==1.7.4
-flask==2.3.3
-google-cloud-logging==3.9.0
-google-cloud-storage==2.17.0
-# numpy
+earthengine-api==1.7.15
+flask
+google-auth==2.14.1
+google-cloud-logging
+google-cloud-storage
 openet-core==0.6.0
 python-dateutil
-# rasterio==1.3.8
-requests==2.31.0
+requests
