@@ -12,8 +12,6 @@ from dateutil.relativedelta import relativedelta
 import ee
 from flask import abort, Response
 from google.cloud import storage
-import numpy as np
-import rasterio
 import requests
 
 import openet.core.utils as utils
@@ -31,12 +29,10 @@ NEW_TASKS = 300
 # Maximum number of queued tasks (intentionally not setting to 3000)
 MAX_TASKS = 1000
 # NODATA_VALUE = -9999
-# START_DAY_OFFSET = 30
-START_DAY_OFFSET = 90
+START_DAY_OFFSET = 30
 END_DAY_OFFSET = 1
 STORAGE_CLIENT = storage.Client()
 TIF_PREFIX = f'EDAY_ALEXI_{ALEXI_VERSION}'
-# TIF_PREFIX = 'EDAY_ALEXI_V10E_EARLY'
 TIF_NAME_FMT = '{prefix}_{status}_{date}.tif'
 TIF_DT_FMT = '%Y%m%d'
 TIF_DT_RE = '(?P<date>\d{8})'
@@ -74,14 +70,15 @@ if 'FUNCTION_REGION' in os.environ:
     ee.Initialize(credentials, project=project_id)
 
 
-def ingest(tgt_dt, status, variable='et', overwrite_flag=False):
+# CGM - Setting variable to upper case ET to match existing assets
+def ingest(tgt_dt, status, variable='ET', workspace='/tmp', overwrite_flag=False):
     """
 
     Parameters
     ----------
     tgt_dt : datetime
     status : {'early', 'provisional', 'final'}
-    variables : {'et'}, optional
+    variable : {'ET'}, optional
     overwrite_flag : bool, optional
 
     Returns
@@ -90,17 +87,17 @@ def ingest(tgt_dt, status, variable='et', overwrite_flag=False):
 
     """
     logging.info(f'ALEXI Daily {variable.upper()} {status} - {tgt_dt.strftime("%Y-%m-%d")}')
-    # response = f'ALEXI Daily {variable.upper()}} - {tgt_dt.strftime("%Y-%m-%d")}'
+    # response = f'ALEXI Daily {variable.upper()} {status} - {tgt_dt.strftime("%Y-%m-%d")}'
 
     tif_name = TIF_NAME_FMT.format(
         prefix=TIF_PREFIX, status=status.upper(), date=tgt_dt.strftime(TIF_DT_FMT)
     )
-    local_ws = os.path.join(os.getcwd(), variable, tgt_dt.strftime(f'%Y%m%d'))
+    local_ws = os.path.join(workspace, variable.lower(), tgt_dt.strftime(f'%Y%m%d'))
     local_path = os.path.join(local_ws, tif_name)
     source_path = f'{SOURCE_URL}/{status.lower()}/{tif_name}'
     bucket_path = f'gs://{BUCKET_NAME}/{BUCKET_FOLDER}/{tif_name}'
     asset_id = f'{ASSET_COLL_ID}/{tgt_dt.strftime(ASSET_DT_FMT)}'
-    export_name = f'alexi_daily_{variable}_{tgt_dt.strftime("%Y%m%d")}'
+    export_name = f'alexi_daily_{variable.lower()}_{tgt_dt.strftime("%Y%m%d")}'
 
     logging.debug(f'  {source_path}')
     logging.debug(f'  {local_path}')
@@ -132,18 +129,25 @@ def ingest(tgt_dt, status, variable='et', overwrite_flag=False):
     if not os.path.isfile(local_path):
         return f'{export_name} - Image was not downloaded, skipping\n'
 
+    ####
+
+    # CGM - This block can be removed once images are correctly positioned and nodata set
+    # import numpy as np
+    # import rasterio
     # # Set the nodata parameter and tile the geotiff
     # with rasterio.open(local_path) as src:
     #     data = src.read()
     #     profile = src.profile.copy()
+    # data[data < -9998] = -9999
     # profile.update(
-    #     # [0.04,0,-125.02,0,-0.04,49.78]
-    #     transform=rasterio.transform.from_origin(-125.02, 49.78, 0.04, 0.04),
-    #     # tiled=True, blockxsize=256, blockysize=256,
-    #     # nodata=-9999
+    #     # transform=rasterio.transform.from_origin(-125.02, 49.78, 0.04, 0.04),
+    #     tiled=True, blockxsize=256, blockysize=256,
+    #     nodata=-9999,
     # )
     # with rasterio.open(local_path, "w", **profile) as dst:
     #     dst.write(data)
+
+    ####
 
     # Copy the file to the bucket for ingest and archiving
     bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
@@ -213,16 +217,14 @@ def update(request):
     request_json = request.get_json(silent=True)
     request_args = request.args
 
-    variable = 'et'
-
     # Default start and end date to None if not set
     if request_json and ('status' in request_json):
         status = request_json['status']
     elif request_args and ('status' in request_args):
         status = request_args['status']
     else:
+        status = None
         abort(400, description=f'status parameter was net set or could not be parsed')
-        # status = 'early'
 
     if status not in STATUS:
         abort(400, description=f'status parameter was net set or could not be parsed')
@@ -291,10 +293,9 @@ def update(request):
         abort(400, description=f'overwrite="{overwrite_flag}" could not be parsed')
 
     args = {
-        'status': stats,
+        'status': status,
         'start_dt': start_dt,
         'end_dt': end_dt,
-        'variable': variable,
         'limit': NEW_TASKS,
         'overwrite_flag': overwrite_flag,
     }
@@ -302,14 +303,14 @@ def update(request):
     response = ''
     count = 0
     for tgt_dt in ingest_dates(**args):
-        response += ingest(tgt_dt=tgt_dt, variable=variable, overwrite_flag=True)
+        response += ingest(tgt_dt=tgt_dt, status=status, overwrite_flag=True)
         count += 1
 
     # response = f'Ingested {count} new assets\n'
     return Response(response, mimetype='text/plain')
 
 
-def ingest_dates(status, start_dt, end_dt, variable, limit, overwrite_flag=False):
+def ingest_dates(status, start_dt, end_dt, limit=0, overwrite_flag=False):
     """Identify hourly datetimes to ingest
 
     Parameters
@@ -319,7 +320,6 @@ def ingest_dates(status, start_dt, end_dt, variable, limit, overwrite_flag=False
         Start date.
     end_dt : datetime
         End date, inclusive.
-    variable : str
     limit : int
     overwrite_flag : bool, optional
 
@@ -344,34 +344,35 @@ def ingest_dates(status, start_dt, end_dt, variable, limit, overwrite_flag=False
     # ))
     # logging.info(f'Test dates: {len(test_dt_list)}')
 
-    # Check if any of the needed dates are currently being ingested
-    # Check task list before checking asset list in case a task switches
-    #   from running to done before the asset list is retrieved.
-    task_id_list = [
-        desc.replace('\nAsset ingestion: ', '')
-        for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()
-    ]
-    task_count = len(task_id_list)
-    task_dates = {
-        datetime.strptime(m.group('date'), '%Y%m%d').strftime(ISO_DT_FMT)
-        for task_id in task_id_list
-        for m in [task_id_re.search(task_id)] if m
-    }
-    # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
-
-    # Switch date list to be dates that are missing
-    test_dt_list = [
-        dt for dt in test_dt_list
-        if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)
-    ]
-    if not test_dt_list:
-        logging.info('All dates are queued for export')
-        return []
-    # else:
-    #     logging.info('\nMissing asset dates: {}'.format(', '.join(
-    #         map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
-    #     ))
-    # logging.info(f'Test dates: {len(test_dt_list)}')
+    # CGM - Checking the task list is timing out for some reason
+    # # Check if any of the needed dates are currently being ingested
+    # # Check task list before checking asset list in case a task switches
+    # #   from running to done before the asset list is retrieved.
+    # task_id_list = [
+    #     desc.replace('\nAsset ingestion: ', '')
+    #     for desc in get_ee_tasks(states=['RUNNING', 'READY']).keys()
+    # ]
+    # task_count = len(task_id_list)
+    # task_dates = {
+    #     datetime.strptime(m.group('date'), '%Y%m%d').strftime(ISO_DT_FMT)
+    #     for task_id in task_id_list
+    #     for m in [task_id_re.search(task_id)] if m
+    # }
+    # # logging.debug('Task dates: {", ".join(sorted(task_dates))}')
+    #
+    # # Switch date list to be dates that are missing
+    # test_dt_list = [
+    #     dt for dt in test_dt_list
+    #     if overwrite_flag or (dt.strftime(ISO_DT_FMT) not in task_dates)
+    # ]
+    # if not test_dt_list:
+    #     logging.info('All dates are queued for export')
+    #     return []
+    # # else:
+    # #     logging.info('\nMissing asset dates: {}'.format(', '.join(
+    # #         map(lambda x: x.strftime('%Y-%m-%d'), test_dt_list))
+    # #     ))
+    # # logging.info(f'Test dates: {len(test_dt_list)}')
 
     # Check if the assets already exist
     # For now, assume the collection exists
@@ -432,33 +433,6 @@ def ingest_dates(status, start_dt, end_dt, variable, limit, overwrite_flag=False
         ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
     ))
 
-    # # Check bucket by year and only for missing years
-    # # This should be faster later on once more of the assets are ingested
-    # #   since it will skip most years
-    # logging.debug('\nChecking bucket files (by year)')
-    # bucket = STORAGE_CLIENT.bucket(BUCKET_NAME)
-    # bucket_dates = set()
-    # for year in {test_dt.year for test_dt in test_dt_list}:
-    #     logging.debug(f'  {year}')
-    #     bucket_date_list = [
-    #         datetime.strptime(m.group('date'), TIF_DT_FMT).strftime(ISO_DT_FMT)
-    #         for blob in bucket.list_blobs(prefix=f'{BUCKET_FOLDER}/{TIF_PREFIX}{year}')
-    #         for m in [re.search(TIF_DT_RE, blob.name)] if m
-    #         # if blob.name.endswith('.tif')
-    #     ]
-    #     # CGM - Check the bucket_dates against the test_dt_list before updating?
-    #     bucket_dates.update(bucket_date_list)
-    # logging.info(f'Bucket dates: {len(bucket_dates)}')
-    #
-    # # Keep dates that have a bucket file
-    # test_dt_list = [dt for dt in test_dt_list if dt.strftime(ISO_DT_FMT) in bucket_dates]
-    # if not test_dt_list:
-    #     logging.info('No dates to process after filtering bucket files')
-    #     return []
-    # logging.debug('\nDates (after filtering bucket files): {}'.format(
-    #     ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
-    # ))
-
     # Finally, check the server for images
     # TODO: Add code to check if the images have a newer last modified date
     logging.debug('\nChecking server files')
@@ -498,14 +472,15 @@ def ingest_dates(status, start_dt, end_dt, variable, limit, overwrite_flag=False
         ', '.join(map(lambda x: x.strftime(ISO_DT_FMT), test_dt_list))
     ))
 
-    # Limit the number of dates returned to the number of open queue spots
-    if limit:
-        new_tasks = min(max(MAX_TASKS - len(task_id_list), 0), limit)
-        logging.debug(f'Date count:    {len(test_dt_list)}')
-        logging.debug(f'Date limit:    {limit}')
-        logging.info(f'Queued tasks:  {task_count}')
-        logging.info(f'Limited dates: {new_tasks}')
-        test_dt_list = test_dt_list[:new_tasks]
+    # CGM - Checking the task list is timing out for some reason
+    # # Limit the number of dates returned to the number of open queue spots
+    # if limit:
+    #     new_tasks = min(max(MAX_TASKS - len(task_id_list), 0), limit)
+    #     logging.debug(f'Date count:    {len(test_dt_list)}')
+    #     logging.debug(f'Date limit:    {limit}')
+    #     logging.info(f'Queued tasks:  {task_count}')
+    #     logging.info(f'Limited dates: {new_tasks}')
+    #     test_dt_list = test_dt_list[:new_tasks]
 
     return test_dt_list
 
@@ -580,7 +555,7 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=4):
 
 
 def get_json_file_listing(url, variable=None):
-    response = requests.get(url + '/?format=json')
+    response = requests.get(url + '/?format=json', timeout=5)
     response.raise_for_status()
 
     output = json.loads(response.text)['directory_listing']
@@ -604,9 +579,9 @@ def url_download(download_url, output_path, verify=True):
     None
 
     """
-    for i in range(1, 6):
+    for i in range(1, 4):
         try:
-            response = requests.get(download_url, stream=True, verify=verify)
+            response = requests.get(download_url, stream=True, verify=verify, timeout=5)
         except Exception as e:
             logging.info(f'  Exception: {e}')
             return False
@@ -643,6 +618,10 @@ def arg_parse():
     parser = argparse.ArgumentParser(
         description='Ingest ALEXI Daily ET Assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument(
+        '--workspace', metavar='PATH',
+        default=os.path.dirname(os.path.abspath(__file__)),
+        help='Set the current working directory')
     parser.add_argument(
         '--status', required=True, choices=STATUS,
         help=f'Build status: {", ".join(STATUS)}')
@@ -684,7 +663,6 @@ def arg_parse():
 
 if __name__ == '__main__':
     args = arg_parse()
-    # logging.basicConfig(level=args.loglevel, format='%(message)s')
 
     # if args.key and 'FUNCTION_REGION' not in os.environ:
     if args.key:
@@ -697,26 +675,22 @@ if __name__ == '__main__':
         logging.info(f'\nInitializing Earth Engine using project credentials'
                      f'\n  Project ID: {args.project}')
         ee.Initialize(project=args.project)
-        # ee.Initialize(
-        #     project=args.project, opt_url='https://earthengine-highvolume.googleapis.com'
-        # )
     else:
         logging.info('\nInitializing Earth Engine using user credentials')
         ee.Initialize()
 
-    # Build the image collection if it doesn't exist
-    logging.debug(f'Image Collection: {ASSET_COLL_ID}')
-    if not ee.data.getInfo(ASSET_COLL_ID):
-        logging.info(f'\nImage collection does not exist and will be built'
-                     f'\n  {ASSET_COLL_ID}')
-        input('Press ENTER to continue')
-        ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
+    # # Build the image collection if it doesn't exist
+    # logging.debug(f'Image Collection: {ASSET_COLL_ID}')
+    # if not ee.data.getInfo(ASSET_COLL_ID):
+    #     logging.info(f'\nImage collection does not exist and will be built'
+    #                  f'\n  {ASSET_COLL_ID}')
+    #     input('Press ENTER to continue')
+    #     ee.data.createAsset({'type': 'IMAGE_COLLECTION'}, ASSET_COLL_ID)
 
     ingest_dt_list = ingest_dates(
         status=args.status,
         start_dt=args.start,
         end_dt=args.end,
-        variable='et',
         limit=args.limit,
         overwrite_flag=args.overwrite,
     )
@@ -728,6 +702,11 @@ if __name__ == '__main__':
         # logging.info(f'Date: {ingest_dt.strftime("%Y-%m-%d")}')
         # Checking if overwrite is needed is happening in the ingest_dates() function
         #   so always overwrite if the date is in the list
-        response = ingest(tgt_dt=ingest_dt, status=args.status, overwrite_flag=True)
+        response = ingest(
+            tgt_dt=ingest_dt,
+            status=args.status,
+            workspace=args.workspace,
+            overwrite_flag=True,
+        )
         logging.info(f'  {response}')
         time.sleep(args.delay)
