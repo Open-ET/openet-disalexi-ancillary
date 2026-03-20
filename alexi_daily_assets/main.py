@@ -1,5 +1,5 @@
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -36,6 +36,7 @@ TIF_PREFIX = f'EDAY_ALEXI_{ALEXI_VERSION}'
 TIF_NAME_FMT = '{prefix}_{status}_{date}.tif'
 TIF_DT_FMT = '%Y%m%d'
 TIF_DT_RE = '(?P<date>\d{8})'
+TODAY_DT = datetime.now(timezone.utc)
 # TODO: Check the units
 UNITS = 'MJ m-2 d-1'
 STATUS = ['early', 'provisional', 'final']
@@ -158,7 +159,7 @@ def ingest(tgt_dt, status, variable='ET', workspace='/tmp', overwrite_flag=False
 
     properties = {
         'date': tgt_dt.strftime('%Y-%m-%d'),
-        'date_ingested': f'{datetime.today().strftime("%Y-%m-%d")}',
+        'date_ingested': f'{TODAY_DT.strftime("%Y-%m-%d")}',
         'doy': int(tgt_dt.strftime('%j')),
         'alexi_version': ALEXI_VERSION,
         'bucket_url': bucket_path,
@@ -245,10 +246,9 @@ def update(request):
         end_date = None
 
     if not start_date and not end_date:
-        today = datetime.today()
-        start_dt = (datetime(today.year, today.month, today.day) -
+        start_dt = (datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                     relativedelta(days=START_DAY_OFFSET))
-        end_dt = (datetime(today.year, today.month, today.day) -
+        end_dt = (datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                   relativedelta(days=END_DAY_OFFSET))
     elif start_date and end_date:
         # Only process custom range if start and end are both set
@@ -262,7 +262,7 @@ def update(request):
             abort(404, description=response)
 
         # Force end date to be last day of previous month
-        # end_dt = min(end_dt, datetime.today() - timedelta(days=1))
+        # end_dt = min(end_dt, TODAY_DT - timedelta(days=1))
 
         # TODO: Force start date to be at least one month before end
         # start_dt = min(start_dt, end_dt - relativedelta(months=1) + relativedelta(days=1))
@@ -613,8 +613,6 @@ def url_download(download_url, output_path, verify=True):
 
 def arg_parse():
     """"""
-    today = datetime.today()
-
     parser = argparse.ArgumentParser(
         description='Ingest ALEXI Daily ET Assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -627,12 +625,12 @@ def arg_parse():
         help=f'Build status: {", ".join(STATUS)}')
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime(today.year, today.month, today.day) -
+        default=(datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                  relativedelta(days=START_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='Start date (format YYYY-MM-DD)')
     parser.add_argument(
         '--end', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime(today.year, today.month, today.day) -
+        default=(datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                  relativedelta(days=END_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
     parser.add_argument(

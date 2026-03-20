@@ -1,5 +1,5 @@
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import re
@@ -26,6 +26,7 @@ MAX_TASKS = 1000
 # NODATA_VALUE = -9999
 START_DAY_OFFSET = 120
 END_DAY_OFFSET = 3
+TODAY_DT = datetime.now(timezone.utc)
 
 if 'FUNCTION_REGION' in os.environ:
     # Logging is not working correctly in cloud functions for Python 3.8+
@@ -262,10 +263,9 @@ def update(request):
         end_date = None
 
     if not start_date and not end_date:
-        today = datetime.today()
-        start_dt = (datetime(today.year, today.month, today.day) -
+        start_dt = (datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                     relativedelta(days=START_DAY_OFFSET))
-        end_dt = (datetime(today.year, today.month, today.day) -
+        end_dt = (datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                   relativedelta(days=END_DAY_OFFSET))
     elif start_date and end_date:
         # Only process custom range if start and end are both set
@@ -279,7 +279,7 @@ def update(request):
             abort(404, description=response)
 
         # Force end date to be last day of previous month
-        # end_dt = min(end_dt, datetime.today() - timedelta(days=1))
+        # end_dt = min(end_dt, TODAY_DT - timedelta(days=1))
 
         # TODO: Force start date to be at least one month before end
         # start_dt = min(
@@ -517,19 +517,17 @@ def get_ee_tasks(states=['RUNNING', 'READY'], retries=4):
 
 def arg_parse():
     """"""
-    today = datetime.today()
-
     parser = argparse.ArgumentParser(
         description='Generate DisALEXI daily insolation assets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         '--start', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime(today.year, today.month, today.day) -
+        default=(datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                  relativedelta(days=START_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='Start date (format YYYY-MM-DD)')
     parser.add_argument(
         '--end', type=utils.arg_valid_date, metavar='DATE',
-        default=(datetime(today.year, today.month, today.day) -
+        default=(datetime(TODAY_DT.year, TODAY_DT.month, TODAY_DT.day) -
                  relativedelta(days=END_DAY_OFFSET)).strftime('%Y-%m-%d'),
         help='End date (format YYYY-MM-DD)')
     parser.add_argument(
