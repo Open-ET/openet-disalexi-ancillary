@@ -31,5 +31,5 @@ gcloud scheduler jobs update http alexi-et-daily-provisional --schedule "5 23 * 
 Update all "early" assets every day.
 
 ```
-gcloud scheduler jobs update http alexi-et-daily-early --schedule "5 23 * * *" --uri "https://us-central1-openet.cloudfunctions.net/alexi-et-daily?status=early&overwrite=true" --description "ALEXI Daily ET Early Update" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
+gcloud scheduler jobs update http alexi-et-daily-early --schedule "10 23 * * *" --uri "https://us-central1-openet.cloudfunctions.net/alexi-et-daily?status=early&overwrite=true" --description "ALEXI Daily ET Early Update" --http-method POST --time-zone "UTC" --project openet --location us-central1 --max-retry-attempts 1 --attempt-deadline=540s --min-backoff=30s
 ```
