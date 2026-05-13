@@ -132,7 +132,7 @@ def main(tgt_dt, gee_key_file, project_id, overwrite_flag=False):
                     image=output_img,
                     description=f'disalexi_interpolate_ancillary_{var_name}_{hour_dt.strftime(ASSET_DT_FMT)}',
                     assetId=asset_id,
-                    dimensions=[1440, 600],
+                    dimensions=[1440, 720],
                     crs='EPSG:4326',
                     crsTransform=[0.25, 0, -180, 0, -0.25, 90],
                 )
@@ -194,7 +194,7 @@ def main(tgt_dt, gee_key_file, project_id, overwrite_flag=False):
                 image=output_img,
                 description=f'disalexi_interpolate_ancillary_{var_name}_{hour_dt.strftime(ASSET_DT_FMT)}',
                 assetId=asset_id,
-                dimensions=[1440, 600],
+                dimensions=[1440, 720],
                 crs='EPSG:4326',
                 crsTransform=[0.25, 0, -180, 0, -0.25, 90],
             )

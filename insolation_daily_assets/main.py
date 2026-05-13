@@ -1,6 +1,5 @@
 import argparse
 from datetime import datetime, timedelta, timezone
-import logging
 import os
 import re
 import time
@@ -92,18 +91,22 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
     logging.debug(f'  {asset_id}')
     logging.debug(f'  {export_name}')
 
-    if ee.data.getInfo(asset_id):
-        if overwrite_flag:
-            try:
-                ee.data.deleteAsset(asset_id)
-            except Exception as e:
-                logging.info(f'Error trying to delete the existing asset')
-                return f'{export_name} - An error occurred while trying to '\
-                       f'delete the existing asset, skipping\n{e}\n'
-        else:
-            logging.info(f'The asset already exists and overwrite is False')
-            return f'{export_name} - The asset already exists and overwrite '\
-                   f'is False, skipping\n'
+    if not overwrite_flag and ee.data.getInfo(asset_id):
+        logging.info(f'The asset already exists and overwrite is False')
+        return f'{export_name} - The asset already exists and overwrite is False, skipping\n'
+    # DEADBEEF - Switching to setting overwrite flag in toAsset call below
+    # if ee.data.getInfo(asset_id):
+    #     if overwrite_flag:
+    #         try:
+    #             ee.data.deleteAsset(asset_id)
+    #         except Exception as e:
+    #             logging.info(f'Error trying to delete the existing asset')
+    #             return f'{export_name} - An error occurred while trying to '\
+    #                    f'delete the existing asset, skipping\n{e}\n'
+    #     else:
+    #         logging.info(f'The asset already exists and overwrite is False')
+    #         return f'{export_name} - The asset already exists and overwrite '\
+    #                f'is False, skipping\n'
 
     if region.lower() == 'conus':
         utc_offset = 6
@@ -186,6 +189,7 @@ def ingest(tgt_dt, region, variable='insolation', overwrite_flag=False):
         crs=asset_crs,
         crsTransform=asset_transform,
         dimensions=asset_shape,
+        overwrite=overwrite_flag,
     )
 
     # Start the export task
@@ -544,6 +548,9 @@ def arg_parse():
     parser.add_argument(
         '--overwrite', default=False, action='store_true',
         help='Force overwrite of existing files')
+    parser.add_argument(
+        '--project', default=None,
+        help='Google cloud project ID to use for GEE authentication')
     parser.add_argument(
         '--reverse', default=False, action='store_true',
         help='Process dates in reverse order')

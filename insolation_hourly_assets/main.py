@@ -1,7 +1,6 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 import json
-import logging
 import os
 import pprint
 import re
