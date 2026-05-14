@@ -1,0 +1,7 @@
+.gcloudignore
+
+# Download folder
+insolation
+
+tools/*.py
+*.sh
